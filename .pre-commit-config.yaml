@@ -1,0 +1,41 @@
+
+# ============================================================================
+# rhio — pre-commit hooks
+# ============================================================================
+# Install:  pip install pre-commit && pre-commit install
+# Run all:  pre-commit run --all-files
+# Update:   pre-commit autoupdate
+#
+# See https://pre-commit.com for documentation.
+# ============================================================================
+
+exclude: '^(external/|\.git/)'
+
+repos:
+  # ── General checks ───────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=100']
+        exclude: '^.*\.(spv|png)$'
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # ── C + C++ formatting ────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.4
+    hooks:
+      - id: clang-format
+        files: |
+          (?x)^(
+              include|
+              src|
+              examples|
+              tests
+          ).*$
+        types_or: [c, c++]
