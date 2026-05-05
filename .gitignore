@@ -1,20 +1,22 @@
-.xmake
+.xmake/
 
 CMakeLists.txt.user
 CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
+CMakeFiles/
+CMakeScripts/
+Testing/
 Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
-_deps
+_deps/
 CMakeUserPresets.json
 
 .DS_Store
 
 .cache/
 /[Bb]uild/
+build*/
+cmake-build*/
 /out/
