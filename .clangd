@@ -1,0 +1,55 @@
+# .clangd configuration for rhio development.
+#
+# Keep the base config language-neutral. Examples are C++20, while the
+# single-header library is C99 when clangd analyzes rhio.h directly.
+
+CompileFlags:
+  Add:
+    # Default backend for IDE analysis.
+    # Switch between these to check different backend implementations.
+    - -DRHIO_BACKEND_OPENGL
+    # - -DRHIO_BACKEND_OPENGLES2
+    # - -DRHIO_BACKEND_OPENGLES3
+    # - -DRHIO_BACKEND_VULKAN
+
+    # Enable debug logging and assertions for development analysis.
+    - -D_RHIO_DEBUG
+    - -D_RHIO_LOG_SUPPORT
+
+    # Project include path.
+    - -I.
+
+    # Common warnings to help catch issues during development.
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Wno-unused-parameter
+
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+
+Index:
+  Background: Build
+
+---
+If:
+  PathMatch: examples/.*
+
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -x
+    - c++
+
+---
+If:
+  PathMatch: rhio\.h
+
+CompileFlags:
+  Add:
+    # Enable the implementation section when checking the header itself.
+    - -DRHIO_IMPLEMENTATION
+    - -std=c99
+    - -x
+    - c
