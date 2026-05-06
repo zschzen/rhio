@@ -8,6 +8,22 @@
 *       A tiny, single-header rendering layer for C that abstracts
 *       OpenGL 3.3, ES 2.0/3.0, and Vulkan 1.2 behind one straightforward API.
 *
+*   TABLE OF CONTENTS:
+*       1. Defines and Macros ...................................... [>>DEFS<<]
+*       2. Enumerations ............................................ [>>ENUMS<<]
+*       3. Opaque Resource Handles ................................. [>>HANDLES<<]
+*       4. Types and Structures Definition ......................... [>>TYPES<<]
+*          4.1 Context Creation Info ............................... [>>CTX_INFO<<]
+*       5. Public API Declarations ................................. [>>API<<]
+*       6. RHIO Implementation ..................................... [>>RHIO_IMPL<<]
+*          6.1 API Impl ............................................ [>>API_IMPL<<]
+*              6.1.1 Frame Control ................................. [>>FRAME<<]
+*              6.1.2 Logging ....................................... [>>LOG<<]
+*          6.2 GL Backend .......................................... [>>GL<<]
+*              6.2.1 GL Types and Structures ....................... [>>GL_TYPES<<]
+*              6.2.2 OpenGL Backend Impl ........................... [>>GL_IMPL<<]
+*          6.3 VK Backend .......................................... [>>VK<<]
+*
 *   LIMITATIONS:
 *       - ...
 *
@@ -58,13 +74,19 @@
 // Includes
 //----------------------------------------------------------------------------------
 
+#pragma region "Includes"
+
 #include <stdarg.h> /* va_list, va_start, va_end */
 #include <stdint.h> /* uint8_t, uint64_t, int32_t */
 #include <stdlib.h> /* malloc, calloc, realloc, free */
 
+#pragma endregion
+
 //----------------------------------------------------------------------------------
-// Defines and Macros
+// Defines and Macros                                                     [>>DEFS<<]
 //----------------------------------------------------------------------------------
+
+#pragma region "Defines and Macros"
 
 // Shared library
 #ifndef RI_EXPORT
@@ -210,9 +232,13 @@ typedef double   riF64;
 typedef riU32    riFlags; /* bitfield type used for usage/feature flags */
 typedef riU64    riSize;
 
+#pragma endregion         // Defines and Macros
+
 //----------------------------------------------------------------------------------
-// Enumerations
+// Enumerations                                                          [>>ENUMS<<]
 //----------------------------------------------------------------------------------
+
+#pragma region "Enumerations"
 
 // Logging Levels
 typedef enum
@@ -252,16 +278,24 @@ typedef enum
 
 } riStatus;
 
+#pragma endregion // Enumerations
+
 //----------------------------------------------------------------------------------
-// Opaque resource handles
+// Opaque resource handles                                             [>>HANDLES<<]
 //----------------------------------------------------------------------------------
+
+#pragma region "Opaque resource handles"
 
 // The main RHI context NOTE: Caller-Owned Instance
 typedef struct RI_CONTEXT_STRUCT * riContext;
 
+#pragma endregion
+
 //----------------------------------------------------------------------------------
-// Types and Structures Definition
+// Types and Structures Definition                                       [>>TYPES<<]
 //----------------------------------------------------------------------------------
+
+#pragma region "Types and Structures Definition"
 
 // Boolean
 #if !defined( __cplusplus ) && !defined( bool )
@@ -315,7 +349,7 @@ typedef struct riBackendFuncs
 } riBackendFuncs;
 
 //----------------------------------------------------------------------------------
-// Context creation info
+// Context creation info                                              [>>CTX_INFO<<]
 //----------------------------------------------------------------------------------
 
 // Context Initialization Information
@@ -331,28 +365,44 @@ typedef struct riContextInfo
 
 } riContextInfo;
 
+#pragma endregion // Types and Structures Definition
+
 //----------------------------------------------------------------------------------
 // Callbacks
 //----------------------------------------------------------------------------------
 
+#pragma region "Callbacks"
+
 // Logging Callback Signature
 typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args );
+
+#pragma endregion
 
 //----------------------------------------------------------------------------------
 // Global Variables Definition
 //----------------------------------------------------------------------------------
 
+#pragma region "Global Variables Definition"
+
 // ...
+
+#pragma endregion
 
 //----------------------------------------------------------------------------------
 // Internal Functions Declaration
 //----------------------------------------------------------------------------------
 
+#pragma region "Internal Functions Declaration"
+
 // ...
 
+#pragma endregion
+
 //----------------------------------------------------------------------------------
-// Public API declarations
+// Public API declarations                                                 [>>API<<]
 //----------------------------------------------------------------------------------
+
+#pragma region "Public API declarations"
 
 RI_API riContext rhioCreate( const riContextInfo * info );
 RI_API void      rhioDestroy( riContext ctx );
@@ -367,11 +417,15 @@ RI_API void riSetTraceLogLevel( int logType );                  // Set the minim
 RI_API void riTraceLog( int logType, const char * text, ... );  // Emit trace log message
 RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom trace log
 
+#pragma endregion
+
 /***********************************************************************************
 *
-*   RHIO IMPLEMENTATION
+*   RHIO IMPLEMENTATION                                              [>>RHIO_IMPL<<]
 *
 ************************************************************************************/
+
+#pragma region "RHIO Implementation"
 
 #ifdef RHIO_IMPLEMENTATION
 
@@ -388,6 +442,7 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 // definition only exists inside RHIO_IMPLEMENTATION, so callers can never
 // peek at the members.
 //----------------------------------------------------------------------------------
+
 struct RI_CONTEXT_STRUCT
 {
     riBackend      backend;    // Which backend this context uses
@@ -398,6 +453,7 @@ struct RI_CONTEXT_STRUCT
 //----------------------------------------------------------------------------------
 // Module Internal State
 //----------------------------------------------------------------------------------
+
 static int              rhio_logTypeLevel = RI_LOG_INFO;
 static TraceLogCallback rhio_traceLog     = NULL;
 
@@ -421,6 +477,8 @@ static riStatus _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSiz
 //    ▌ ▙▌▙▘▙▖▟▖▙▖  ▛▌▌ ▟▖
 //
 // =================================================================================
+
+#    pragma region "API Impl"
 
 // Create and initialize a new context instance (Caller-owned)
 // NOTE: Allocates the opaque context and resolves the backend vtable based on info.
@@ -536,11 +594,15 @@ rhioDestroy( riContext ctx )
     TRACELOG( RI_LOG_INFO, "CONTEXT: Destroyed successfully" );
 }
 
+#    pragma endregion // API Impl
+
 /* ---------------------------------------------------------------------------------
  *
- * FRAME CONTROL                                                 [>>FRAME_CONTROL<<]
+ * FRAME CONTROL                                                         [>>FRAME<<]
  *
  * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Frame Control"
 
 // Prepare the context for a new frame's rendering commands
 RI_API void
@@ -566,11 +628,15 @@ rhioPresent( riContext ctx )
     ctx->funcs.present( ctx->backendCtx );
 }
 
+#    pragma endregion
+
 /* ---------------------------------------------------------------------------------
  *
- * LOGGING                                                             [>>LOGGING<<]
+ * LOGGING                                                                 [>>LOG<<]
  *
  * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Logging"
 
 // Set the minimum log level
 RI_API void
@@ -648,18 +714,22 @@ riSetTraceLogCallback( TraceLogCallback callback )
     rhio_traceLog = callback;
 }
 
+#    pragma endregion // Logging
+
 // =================================================================================
 //
 //    ▄▖▄▖▄▖▖ ▖▄▖▖   ▄▖▄▖
-//    ▌▌▙▌▙▖▛▖▌▌ ▌ ▟▖▙▖▚                                            [>>GL_BACKEND<<]
+//    ▌▌▙▌▙▖▛▖▌▌ ▌ ▟▖▙▖▚                                                    [>>GL<<]
 //    ▙▌▌ ▙▖▌▝▌▙▌▙▖▝ ▙▖▄▌
 //
 // =================================================================================
 
+#    pragma region "GL Backend"
+
 #    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
 
 //----------------------------------------------------------------------------------
-// Types and Structures Definition
+// Types and Structures Definition                                    [>>GL_TYPES<<]
 //----------------------------------------------------------------------------------
 
 // Internal OpenGL context state
@@ -670,7 +740,7 @@ typedef struct riGL_Context
 } riGL_Context;
 
 //----------------------------------------------------------------------------------
-// OpenGL Backend Implementation (Stubs)
+// OpenGL Backend Implementation (Stubs)                               [>>GL_IMPL<<]
 //----------------------------------------------------------------------------------
 
 // Initialize OpenGL state and allocate default resources
@@ -750,19 +820,25 @@ _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
     return RI_SUCCESS;
 }
 
-#    endif /* RHIO_BACKEND_OPENGL || RHIO_BACKEND_OPENGLES */
+#    endif            /* RHIO_BACKEND_OPENGL || RHIO_BACKEND_OPENGLES */
+
+#    pragma endregion // GL Backend
 
 // =================================================================================
 //
 //    ▖▖▖▖▖ ▖▖▄▖▖ ▖
-//    ▌▌▌▌▌ ▙▘▌▌▛▖▌                                                 [>>VK_BACKEND<<]
+//    ▌▌▌▌▌ ▙▘▌▌▛▖▌                                                         [>>VK<<]
 //    ▚▘▙▌▙▖▌▌▛▌▌▝▌
 //
 // =================================================================================
 
+#    pragma region "VK Backend"
+
 #    if defined( RHIO_BACKEND_VULKAN )
 // TODO: Implement Vulkan 1.4 backend
 #    endif
+
+#    pragma endregion
 
 //----------------------------------------------------------------------------------
 // Module Internal Functions Definition
@@ -770,6 +846,8 @@ _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
 
 // ...
 
-#endif // RHIO_IMPLEMENTATION
+#endif            // RHIO_IMPLEMENTATION
 
-#endif // RHIO_H
+#pragma endregion // RHIO Implementation
+
+#endif            // RHIO_H
