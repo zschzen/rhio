@@ -54,6 +54,7 @@
 //----------------------------------------------------------------------------------
 
 #include <stdarg.h> /* va_list, va_start, va_end */
+#include <stdint.h> /* uint8_t, uint64_t, int32_t */
 #include <stdlib.h> /* malloc, calloc, realloc, free */
 
 //----------------------------------------------------------------------------------
@@ -143,37 +144,101 @@
 #    define RI_FREE( pt ) free( pt )
 #endif
 
+//----------------------------------------------------------------------------------
+// Misc utility macros
+//----------------------------------------------------------------------------------
+
 // Silence compiler for non used
 #ifndef UNUSED
 #    define UNUSED( x ) (void)( x )
 #endif
 
 // Determine if a given str is null or empty
-#define STR_NONEMPTY( s ) ( ( s ) != NULL && ( s )[0] != '\0' )
+#ifndef STR_NONEMPTY
+#    define STR_NONEMPTY( s ) ( ( s ) != NULL && ( s )[0] != '\0' )
+#endif
 
 // Base trace log macro
 #ifndef TRACELOG
 #    define TRACELOG( l, ... ) TraceLog( l, __VA_ARGS__ )
 #endif
 
-//----------------------------------------------------------------------------------
-// Types and Structures Definition
-//----------------------------------------------------------------------------------
+// API limits
+#ifndef RHIO_MAX_COLOR_ATTACHMENTS
+#    define RHIO_MAX_COLOR_ATTACHMENTS 8
+#endif
+#ifndef RHIO_MAX_VERTEX_ATTRIBUTES
+#    define RHIO_MAX_VERTEX_ATTRIBUTES 16
+#endif
+#ifndef RHIO_MAX_VERTEX_BUFFERS
+#    define RHIO_MAX_VERTEX_BUFFERS 8
+#endif
 
-// Logging Callback Signature
-typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args );
+/*
+ * Guard Clause
+ *
+ * Use these at the top of every public function to validate non-nullable parameters.
+ * They return immediately on failure.
+ *
+ *   RI_GUARD_NULL( ptr, retval )    - return retval if ptr is NULL
+ *   RI_GUARD( cond, retval )        - return retval if condition is false
+ */
+#define RI_GUARD_NULL( ptr, retval )                                                                                   \
+    do                                                                                                                 \
+        {                                                                                                              \
+            if( RI_UNLIKELY( ( ptr ) == NULL ) )                                                                       \
+                {                                                                                                      \
+                    TRACELOG( RI_LOG_ERROR, "%s: unexpected NULL argument", __func__ );                                \
+                    return ( retval );                                                                                 \
+                }                                                                                                      \
+        }                                                                                                              \
+    while( 0 )
+
+#define RI_GUARD( cond, retval )                                                                                       \
+    do                                                                                                                 \
+        {                                                                                                              \
+            if( RI_UNLIKELY( !( cond ) ) )                                                                             \
+                {                                                                                                      \
+                    TRACELOG( RI_LOG_ERROR, "%s: guard failed: " #cond, __func__ );                                    \
+                    return ( retval );                                                                                 \
+                }                                                                                                      \
+        }                                                                                                              \
+    while( 0 )
+
+// Type aliases
+typedef uint8_t  riU8;
+typedef uint16_t riU16;
+typedef uint32_t riU32;
+typedef uint64_t riU64;
+typedef int8_t   riI8;
+typedef int16_t  riI16;
+typedef int32_t  riI32;
+typedef int64_t  riI64;
+typedef float    riF32;
+typedef double   riF64;
+typedef riU32    riFlags; /* bitfield type used for usage/feature flags */
+typedef riU64    riSize;
+
+//----------------------------------------------------------------------------------
+// Enumerations
+//----------------------------------------------------------------------------------
 
 // Logging Levels
 typedef enum
 {
-    RI_LOG_TRACE = 0,
-    RI_LOG_DEBUG,
-    RI_LOG_INFO,
-    RI_LOG_WARNING,
-    RI_LOG_ERROR,
-    RI_LOG_FATAL,
-    RI_LOG_NONE
+    RI_LOG_ALL = 0, // Emit all logs
+    RI_LOG_TRACE,   // Internal use
+    RI_LOG_DEBUG,   // Internal use. Disabled on release builds
+    RI_LOG_INFO,    // Program execution
+    RI_LOG_WARNING, // Recoverable failures
+    RI_LOG_ERROR,   // Unrecoverable failures
+    RI_LOG_FATAL,   // Abort execution with EXIT_FAILURE
+    RI_LOG_NONE     // Disable logging system
 } riTraceLogLevel;
+
+//----------------------------------------------------------------------------------
+// Types and Structures Definition
+//----------------------------------------------------------------------------------
 
 // Boolean
 #if !defined( __cplusplus ) && !defined( bool )
@@ -192,8 +257,8 @@ typedef enum
 #    endif
 #endif
 
-// Initialization information
 #if !defined( RHIO_INIT_INFO_TYPE )
+// Initialization information
 typedef struct
 {
     const char * appName; // Application name
@@ -201,6 +266,13 @@ typedef struct
 } riInitInfo;
 #    define RHIO_INIT_INFO_TYPE
 #endif
+
+//----------------------------------------------------------------------------------
+// Callbacks
+//----------------------------------------------------------------------------------
+
+// Logging Callback Signature
+typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args );
 
 //----------------------------------------------------------------------------------
 // Global Variables Definition
