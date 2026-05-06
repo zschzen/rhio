@@ -648,6 +648,122 @@ riSetTraceLogCallback( TraceLogCallback callback )
     rhio_traceLog = callback;
 }
 
+// =================================================================================
+//
+//    ▄▖▄▖▄▖▖ ▖▄▖▖   ▄▖▄▖
+//    ▌▌▙▌▙▖▛▖▌▌ ▌ ▟▖▙▖▚                                            [>>GL_BACKEND<<]
+//    ▙▌▌ ▙▖▌▝▌▙▌▙▖▝ ▙▖▄▌
+//
+// =================================================================================
+
+#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
+
+//----------------------------------------------------------------------------------
+// Types and Structures Definition
+//----------------------------------------------------------------------------------
+
+// Internal OpenGL context state
+typedef struct riGL_Context
+{
+    int dummyPlaceholder; // TODO: Replace with actual OpenGL resource handles
+
+} riGL_Context;
+
+//----------------------------------------------------------------------------------
+// OpenGL Backend Implementation (Stubs)
+//----------------------------------------------------------------------------------
+
+// Initialize OpenGL state and allocate default resources
+static riStatus
+_rhioGL_init( void * backendCtx, const riInitInfo * info )
+{
+    UNUSED( backendCtx );
+    UNUSED( info );
+
+    // TODO: Initialize GL state, load extensions, create default VAO, etc.
+
+    TRACELOG( RI_LOG_INFO, "BACKEND GL: Initialized successfully (stub)" );
+
+    return RI_SUCCESS;
+}
+
+// Free OpenGL resources and tear down context state
+static void
+_rhioGL_shutdown( void * backendCtx )
+{
+    UNUSED( backendCtx );
+
+    // TODO: Delete allocated GL resources (buffers, textures, shaders)
+
+    TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete (stub)" );
+}
+
+// Prepare OpenGL state for a new frame's rendering commands
+static void
+_rhioGL_beginFrame( void * backendCtx )
+{
+    UNUSED( backendCtx );
+
+    // TODO: Reset per-frame scratch allocators and bind default states
+}
+
+// Finalize OpenGL rendering commands for the current frame
+static void
+_rhioGL_endFrame( void * backendCtx )
+{
+    UNUSED( backendCtx );
+
+    // TODO: Flush command queues if batching is implemented
+}
+
+// Display the rendered frame to the screen
+static void
+_rhioGL_present( void * backendCtx )
+{
+    UNUSED( backendCtx );
+
+    // TODO: Invoke platform-specific swap-buffers (e.g., glfwSwapBuffers)
+}
+
+// Populate the vtable with OpenGL backend implementations and return the required context size
+static riStatus
+_rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
+{
+    RI_GUARD_NULL( f, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( backendCtxSize, RI_ERROR_INVALID_PARAM );
+
+    // Bind OpenGL-specific functions to the dynamic interface
+    //----------------------------------------------------------
+#        define BIND_GL_FUNC( name ) f->name = _rhioGL_##name
+
+    BIND_GL_FUNC( init );
+    BIND_GL_FUNC( shutdown );
+    BIND_GL_FUNC( beginFrame );
+    BIND_GL_FUNC( endFrame );
+    BIND_GL_FUNC( present );
+
+#        undef BIND_GL_FUNC
+
+    // Report the memory footprint required for the OpenGL context state
+    *backendCtxSize = (riU32)sizeof( riGL_Context );
+
+    return RI_SUCCESS;
+}
+
+#    endif /* RHIO_BACKEND_OPENGL || RHIO_BACKEND_OPENGLES */
+
+// =================================================================================
+//
+//    ▖▖▖▖▖ ▖▖▄▖▖ ▖
+//    ▌▌▌▌▌ ▙▘▌▌▛▖▌                                                 [>>VK_BACKEND<<]
+//    ▚▘▙▌▙▖▌▌▛▌▌▝▌
+//
+// =================================================================================
+
+#    if defined( RHIO_BACKEND_VULKAN )
+// TODO: Implement Vulkan 1.4 backend
+#    endif
+
 //----------------------------------------------------------------------------------
 // Module Internal Functions Definition
 //----------------------------------------------------------------------------------
