@@ -22,6 +22,8 @@ struct WindowInfo
 };
 
 using WindowResizeCallback = void ( * )( int width, int height );
+using WindowKeyCallback    = void    ( * )( int key, int action );
+using WindowGlProc         = void         ( * )( void );
 
 //----------------------------------------------------------------------------------
 // Module Functions Declaration
@@ -33,4 +35,6 @@ bool         WindowShouldClose();
 void         BeginWindowFrame();
 void         EndWindowFrame();
 void         SetWindowResizeCallback( WindowResizeCallback callback );
+void         SetWindowKeyCallback( WindowKeyCallback callback );
 GLFWwindow * GetWindowHandle();
+WindowGlProc GetWindowGlProcAddress( const char * name );

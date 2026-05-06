@@ -38,6 +38,11 @@ OnFramebufferResize( [[maybe_unused]] int width, [[maybe_unused]] int height )
 }
 
 void
+OnKey( [[maybe_unused]] int key, [[maybe_unused]] int action )
+{
+}
+
+void
 ShutdownExample()
 {
     rhioShutdown();

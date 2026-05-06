@@ -51,6 +51,7 @@ main()
         }
 
     SetWindowResizeCallback( OnFramebufferResize );
+    SetWindowKeyCallback( OnKey );
 
 #if defined( __EMSCRIPTEN__ )
     emscripten_set_main_loop( UpdateDrawFrame, 0, 1 );
