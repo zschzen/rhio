@@ -352,7 +352,7 @@ riSetTraceLogLevel( int logType )
 RI_API void
 riTraceLog( int logType, const char * text, ... )
 {
-#    if _RHIO_LOG_SUPPORT
+#    if RHIO_LOG_SUPPORT
     // Threshold message level
     if( ( rhio_logTypeLevel > logType ) || !STR_NONEMPTY( text ) ) return;
 
@@ -407,7 +407,7 @@ riTraceLog( int logType, const char * text, ... )
     va_end( args );
 
     if( RI_LOG_FATAL == logType ) exit( EXIT_FAILURE );
-#    endif /* _RHIO_LOG_SUPPORT */
+#    endif /* RHIO_LOG_SUPPORT */
 }
 
 // Set a custom trace log

@@ -101,18 +101,18 @@ target_compile_definitions(
   ${PROJECT_NAME}
   INTERFACE
     # Build Type
-    $<$<CONFIG:Debug>:_RHIO_DEBUG>
-    $<$<CONFIG:Release>:_RHIO_RELEASE>
+    $<$<CONFIG:Debug>:RHIO_DEBUG>
+    $<$<CONFIG:Release>:RHIO_RELEASE>
 
     # Platform
-    "_RHIO_PLATFORM_$<UPPER_CASE:${PLATFORM}>"
+    "RHIO_PLATFORM_$<UPPER_CASE:${PLATFORM}>"
 
     # Backends
-    $<$<BOOL:${RHIO_BACKEND_OPENGL}>:_RHIO_BACKEND_OPENGL>
-    $<$<BOOL:${RHIO_BACKEND_VULKAN}>:_RHIO_BACKEND_VULKAN>
+    $<$<BOOL:${RHIO_BACKEND_OPENGL}>:RHIO_BACKEND_OPENGL>
+    $<$<BOOL:${RHIO_BACKEND_VULKAN}>:RHIO_BACKEND_VULKAN>
 
     # Log
-    $<$<BOOL:${LOG_SUPPORT}>:_RHIO_LOG_SUPPORT>
+    $<$<BOOL:${LOG_SUPPORT}>:RHIO_LOG_SUPPORT>
 )
 
 # --------------------------------------------------------------------
