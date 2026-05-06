@@ -303,12 +303,12 @@ TraceLog( int logType, const char * text, ... )
     int androidLevel = ANDROID_LOG_DEFAULT;
     switch( logType )
         {
-        case LOG_TRACE:   androidLevel = ANDROID_LOG_VERBOSE; break;
-        case LOG_DEBUG:   androidLevel = ANDROID_LOG_DEBUG; break;
-        case LOG_INFO:    androidLevel = ANDROID_LOG_INFO; break;
-        case LOG_WARNING: androidLevel = ANDROID_LOG_WARN; break;
-        case LOG_ERROR:   androidLevel = ANDROID_LOG_ERROR; break;
-        case LOG_FATAL:   androidLevel = ANDROID_LOG_FATAL; break;
+        case RI_LOG_TRACE:   androidLevel = ANDROID_LOG_VERBOSE; break;
+        case RI_LOG_DEBUG:   androidLevel = ANDROID_LOG_DEBUG; break;
+        case RI_LOG_INFO:    androidLevel = ANDROID_LOG_INFO; break;
+        case RI_LOG_WARNING: androidLevel = ANDROID_LOG_WARN; break;
+        case RI_LOG_ERROR:   androidLevel = ANDROID_LOG_ERROR; break;
+        case RI_LOG_FATAL:   androidLevel = ANDROID_LOG_FATAL; break;
         }
     __android_log_vprint( androidLevel, "rhio", text, args );
 #        else
