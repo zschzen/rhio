@@ -177,36 +177,22 @@
 #    define RHIO_MAX_VERTEX_BUFFERS 8
 #endif
 
-/*
- * Guard Clause
- *
- * Use these at the top of every public function to validate non-nullable parameters.
- * They return immediately on failure.
- *
- *   RI_GUARD_NULL( ptr, retval )    - return retval if ptr is NULL
- *   RI_GUARD( cond, retval )        - return retval if condition is false
- */
-#define RI_GUARD_NULL( ptr, retval )                                                                                   \
+// Internal helper macro. Determines if a cond isnt true
+#define _RI_GUARD_CORE( cond, log_msg, ... )                                                                           \
     do                                                                                                                 \
         {                                                                                                              \
-            if( RI_UNLIKELY( ( ptr ) == NULL ) )                                                                       \
+            if( RI_UNLIKELY( cond ) )                                                                                  \
                 {                                                                                                      \
-                    TRACELOG( RI_LOG_ERROR, "%s: unexpected NULL argument", __func__ );                                \
-                    return ( retval );                                                                                 \
+                    TRACELOG( RI_LOG_ERROR, "%s: " log_msg, __func__ );                                                \
+                    __VA_ARGS__;                                                                                       \
                 }                                                                                                      \
         }                                                                                                              \
     while( 0 )
 
-#define RI_GUARD( cond, retval )                                                                                       \
-    do                                                                                                                 \
-        {                                                                                                              \
-            if( RI_UNLIKELY( !( cond ) ) )                                                                             \
-                {                                                                                                      \
-                    TRACELOG( RI_LOG_ERROR, "%s: guard failed: " #cond, __func__ );                                    \
-                    return ( retval );                                                                                 \
-                }                                                                                                      \
-        }                                                                                                              \
-    while( 0 )
+#define RI_GUARD_NULL( ptr, retval ) _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return ( retval ) )
+#define RI_GUARD( cond, retval )     _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return ( retval ) )
+#define RI_GUARD_NULL_VOID( ptr )    _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return )
+#define RI_GUARD_VOID( cond )        _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return )
 
 // Type aliases
 typedef uint8_t  riU8;
