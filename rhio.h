@@ -1,6 +1,8 @@
 /**********************************************************************************************
 *
-*   rhio v0.1.0 - Single-file header-only C99 RHI
+*     ▌ ▘   v0.0.1
+*   ▛▘▛▌▌▛▌ Single-file header-only C99 RHI
+*   ▌ ▌▌▌▙▌ zlib/libpng licensed
 *
 *   DESCRIPTION:
 *       A tiny, single-header rendering layer for C that abstracts
@@ -61,7 +63,7 @@
 #include <stdlib.h> /* malloc, calloc, realloc, free */
 
 //----------------------------------------------------------------------------------
-// Module Defines and Macros
+// Defines and Macros
 //----------------------------------------------------------------------------------
 
 // Shared library
