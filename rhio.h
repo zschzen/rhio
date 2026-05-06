@@ -227,6 +227,38 @@ typedef enum
     RI_LOG_NONE     // Disable logging system
 } riTraceLogLevel;
 
+// Selects the rendering backend at context-creation time
+typedef enum
+{
+    RI_BACKEND_OPENGL   = 0, // Desktop OpenGL 3.3 core profile
+    RI_BACKEND_OPENGLES = 1, // OpenGL ES 2.0 / 3.0
+    RI_BACKEND_VULKAN   = 2, // Vulkan 1.4
+    RI_BACKEND_CUSTOM   = 3, // Caller supplies the full vtable
+
+} riBackend;
+
+// Return Status Codes
+typedef enum
+{
+    RI_SUCCESS = 0,           // Operation completed successfully
+    RI_ERROR_INVALID_PARAM,   // A required argument was NULL or out of range
+    RI_ERROR_OUT_OF_MEMORY,   // Heap allocation failed
+    RI_ERROR_BACKEND_INIT,    // The backend failed to initialise
+    RI_ERROR_BACKEND_UNAVAIL, // Requested backend not compiled in / not supported
+    RI_ERROR_SHADER_COMPILE,  // Shader source / SPIR-V could not be compiled/linked
+    RI_ERROR_INVALID_STATE,   // Function called in wrong context (e.g. no active pass)
+    RI_ERROR_NOT_READY,       // Resource not yet ready (async / swapchain)
+    RI_ERROR_UNKNOWN,         // Catch-all. check logs for details
+
+} riStatus;
+
+//----------------------------------------------------------------------------------
+// Opaque resource handles
+//----------------------------------------------------------------------------------
+
+// The main RHI context NOTE: Caller-Owned Instance
+typedef struct RI_CONTEXT_STRUCT * riContext;
+
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
 //----------------------------------------------------------------------------------
@@ -258,6 +290,47 @@ typedef struct
 #    define RHIO_INIT_INFO_TYPE
 #endif
 
+// Dynamic Interface - Backend function pointers vtable
+// NOTE: Every rendering operation is routed through a slot in this struct, allowing to:
+//   - Swap backends at runtime without touching the public API
+//   - Unit-test rendering code with a mock backend
+//   - Add new backends without modifying existing backend code
+// Backend authors fill this struct and pass it to `rhioCreate()` via riContextInfo.
+// Built-in backends (OpenGL, Vulkan) are registered automatically.
+typedef struct riBackendFuncs
+{
+    // Lifecycle Management
+    //------------------------------------------------------------------------------
+    riStatus ( *init )( void * backendCtx, const riInitInfo * info ); // Initialize the backend graphics context
+    void     ( *shutdown )( void * backendCtx );                      // Tear down backend resources and free memory
+
+    // Frame Control Operations
+    //------------------------------------------------------------------------------
+    void ( *beginFrame )( void * backendCtx ); // Begin recording commands for the current frame
+    void ( *endFrame )( void * backendCtx );   // End recording commands and submit to GPU
+    void ( *present )( void * backendCtx );    // Present the final frame buffer to the screen
+
+    //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
+
+} riBackendFuncs;
+
+//----------------------------------------------------------------------------------
+// Context creation info
+//----------------------------------------------------------------------------------
+
+// Context Initialization Information
+// NOTE: Holds configuration for creating a rendering context.
+// If `funcs.init` is set, the built-in backend selection
+// is bypassed and the custom vtable is used directly;
+// set `backend` to `RI_BACKEND_CUSTOM`.
+typedef struct riContextInfo
+{
+    riInitInfo     base;    // Basic application info (App name, API version)
+    riBackend      backend; // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
+    riBackendFuncs funcs;   // Dynamic interface hook for custom backend vtable
+
+} riContextInfo;
+
 //----------------------------------------------------------------------------------
 // Callbacks
 //----------------------------------------------------------------------------------
@@ -272,7 +345,7 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // ...
 
 //----------------------------------------------------------------------------------
-// Module Internal Functions Declaration
+// Internal Functions Declaration
 //----------------------------------------------------------------------------------
 
 // ...
@@ -281,17 +354,25 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // Public API declarations
 //----------------------------------------------------------------------------------
 
-RI_API bool rhioInit( const riInitInfo * info );
-RI_API void rhioShutdown( void );
+RI_API riContext rhioCreate( const riContextInfo * info );
+RI_API void      rhioDestroy( riContext ctx );
+
+// Frame control
+RI_API void rhioBeginFrame( riContext ctx );
+RI_API void rhioEndFrame( riContext ctx );
+RI_API void rhioPresent( riContext ctx );
 
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
 RI_API void riTraceLog( int logType, const char * text, ... );  // Emit trace log message
 RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom trace log
 
-//----------------------------------------------------------------------------------
-// Module Functions Definition
-//----------------------------------------------------------------------------------
+/***********************************************************************************
+*
+*   RHIO IMPLEMENTATION
+*
+************************************************************************************/
+
 #ifdef RHIO_IMPLEMENTATION
 
 #    include <stdio.h>
