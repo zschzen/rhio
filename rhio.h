@@ -21,6 +21,9 @@
 *           If left undefined, the library works header‑only and can be safely included anywhere.
 *           Make sure only a single source file defines it.
 *
+*       #define RHIO_LOG_SUPPORT
+*           Enables rhio logging system.
+*
 *   DEPENDENCIES:
 *       - ...
 *
@@ -160,7 +163,7 @@
 
 // Base trace log macro
 #ifndef TRACELOG
-#    define TRACELOG( l, ... ) TraceLog( l, __VA_ARGS__ )
+#    define TRACELOG( l, ... ) riTraceLog( l, __VA_ARGS__ )
 #endif
 
 // API limits
@@ -287,16 +290,16 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // ...
 
 //----------------------------------------------------------------------------------
-// Module Functions Declaration
+// Public API declarations
 //----------------------------------------------------------------------------------
 
 RI_API bool rhioInit( const riInitInfo * info );
 RI_API void rhioShutdown( void );
 
-// Logging Configuration API
-RI_API void SetTraceLogLevel( int logType );
-RI_API void SetTraceLogCallback( TraceLogCallback callback );
-RI_API void TraceLog( int logType, const char * text, ... );
+// Logging system
+RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
+RI_API void riTraceLog( int logType, const char * text, ... );  // Emit trace log message
+RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom trace log
 
 //----------------------------------------------------------------------------------
 // Module Functions Definition
@@ -315,9 +318,11 @@ RI_API void TraceLog( int logType, const char * text, ... );
 static int              rhio_logTypeLevel = RI_LOG_INFO;
 static TraceLogCallback rhio_traceLog     = NULL;
 
-//----------------------------------------------------------------------------------
-// Module Functions Definition: Window and Graphics Device
-//----------------------------------------------------------------------------------
+/***********************************************************************************
+ *                                                                                 *
+ *   PUBLIC API IMPLEMENTATIONS                                                    *
+ *                                                                                 *
+ ***********************************************************************************/
 
 RI_API bool
 rhioInit( const riInitInfo * info )
@@ -334,27 +339,18 @@ rhioShutdown( void )
 {
 }
 
-//----------------------------------------------------------------------------------
-// Module Functions Definition: Logging
-//----------------------------------------------------------------------------------
+/** LOGGING ***********************************************************************/
 
 // Set the minimum log level
 RI_API void
-SetTraceLogLevel( int logType )
+riSetTraceLogLevel( int logType )
 {
     rhio_logTypeLevel = logType;
 }
 
-// Set a custom trace log
-RI_API void
-SetTraceLogCallback( TraceLogCallback callback )
-{
-    rhio_traceLog = callback;
-}
-
 // Emit trace log messages
 RI_API void
-TraceLog( int logType, const char * text, ... )
+riTraceLog( int logType, const char * text, ... )
 {
 #    if _RHIO_LOG_SUPPORT
     // Threshold message level
@@ -383,17 +379,23 @@ TraceLog( int logType, const char * text, ... )
         case RI_LOG_FATAL:   androidLevel = ANDROID_LOG_FATAL; break;
         }
     __android_log_vprint( androidLevel, "rhio", text, args );
+
 #        else
+    // Get log string name
     const char * prefix = "";
+#            define LOG_CASE( level )                                                                                  \
+            case RI_LOG_##level: prefix = #level ": "; break;
+
     switch( logType )
         {
-        case RI_LOG_TRACE:   prefix = "TRACE: "; break;
-        case RI_LOG_DEBUG:   prefix = "DEBUG: "; break;
-        case RI_LOG_INFO:    prefix = "INFO: "; break;
-        case RI_LOG_WARNING: prefix = "WARNING: "; break;
-        case RI_LOG_ERROR:   prefix = "ERROR: "; break;
-        case RI_LOG_FATAL:   prefix = "FATAL: "; break;
+            LOG_CASE( TRACE )
+            LOG_CASE( DEBUG )
+            LOG_CASE( INFO )
+            LOG_CASE( WARNING )
+            LOG_CASE( ERROR )
+            LOG_CASE( FATAL )
         }
+#            undef LOG_CASE
 
     FILE * stream = ( RI_LOG_WARNING <= logType ) ? stderr : stdout;
     fprintf( stream, "[rhio] %s", prefix );
@@ -405,7 +407,14 @@ TraceLog( int logType, const char * text, ... )
     va_end( args );
 
     if( RI_LOG_FATAL == logType ) exit( EXIT_FAILURE );
-#    endif
+#    endif /* _RHIO_LOG_SUPPORT */
+}
+
+// Set a custom trace log
+RI_API void
+riSetTraceLogCallback( TraceLogCallback callback )
+{
+    rhio_traceLog = callback;
 }
 
 //----------------------------------------------------------------------------------
