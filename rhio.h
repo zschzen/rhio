@@ -382,33 +382,195 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 #    endif
 
 //----------------------------------------------------------------------------------
+// Internal context struct (hidden from callers — Handle pattern)
+//
+// The public `riContext` typedef is `struct RI_CONTEXT_STRUCT*`.  The
+// definition only exists inside RHIO_IMPLEMENTATION, so callers can never
+// peek at the members.
+//----------------------------------------------------------------------------------
+struct RI_CONTEXT_STRUCT
+{
+    riBackend      backend;    // Which backend this context uses
+    riBackendFuncs funcs;      // The resolved vtable
+    void *         backendCtx; // Private state allocated by the backend's `init()`
+};
+
+//----------------------------------------------------------------------------------
 // Module Internal State
 //----------------------------------------------------------------------------------
 static int              rhio_logTypeLevel = RI_LOG_INFO;
 static TraceLogCallback rhio_traceLog     = NULL;
 
-/***********************************************************************************
- *                                                                                 *
- *   PUBLIC API IMPLEMENTATIONS                                                    *
- *                                                                                 *
- ***********************************************************************************/
+//----------------------------------------------------------------------------------
+// Backend registration helpers
+//----------------------------------------------------------------------------------
 
-RI_API bool
-rhioInit( const riInitInfo * info )
+#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
+// Populate vtable with OpenGL implementations and return context size
+static riStatus _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize );
+#    endif
+
+#    if defined( RHIO_BACKEND_VULKAN )
+// TODO: Implement Vulkan registration function mapping
+#    endif
+
+// =================================================================================
+//
+//    ▄▖▖▖▄ ▖ ▄▖▄▖  ▄▖▄▖▄▖
+//    ▙▌▌▌▙▘▌ ▐ ▌   ▌▌▙▌▐                                             [>>API_IMPL<<]
+//    ▌ ▙▌▙▘▙▖▟▖▙▖  ▛▌▌ ▟▖
+//
+// =================================================================================
+
+// Create and initialize a new context instance (Caller-owned)
+// NOTE: Allocates the opaque context and resolves the backend vtable based on info.
+// Returns a valid context handle on success, or NULL and logs error on failure.
+RI_API riContext
+rhioCreate( const riContextInfo * info )
 {
-    UNUSED( info );
+    RI_GUARD_NULL( info, NULL );
 
-    TRACELOG( RI_LOG_INFO, "Initialized" );
+    // Context Allocation
+    //----------------------------------------------------------
+    struct RI_CONTEXT_STRUCT * ctx = (struct RI_CONTEXT_STRUCT *)RI_CALLOC( 1, sizeof( *ctx ) );
 
-    return true;
+    if( RI_UNLIKELY( ctx == NULL ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "CONTEXT: Out of memory in %s", __func__ );
+            return NULL;
+        }
+
+    // Backend Vtable Resolution
+    //----------------------------------------------------------
+    ctx->backend = info->backend;
+
+    // Custom backend: Caller provided a vtable hook directly
+    if( info->funcs.init != NULL )
+        {
+            ctx->funcs      = info->funcs;
+
+            // Allocate baseline pointer; the caller's init() can realloc/replace as needed
+            ctx->backendCtx = RI_CALLOC( 1, sizeof( void * ) );
+        }
+    // Built-in backend: Resolve from configuration
+    else
+        {
+            riU32    backendCtxSize = 0;
+            riStatus regStatus      = RI_ERROR_BACKEND_UNAVAIL;
+
+            switch( info->backend )
+                {
+
+                    // Built-in: OpenGL / OpenGL ES
+                    //----------------------------------------------------------
+#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
+                case RI_BACKEND_OPENGL:
+                case RI_BACKEND_OPENGLES: regStatus = _rhioGL_registerFuncs( &ctx->funcs, &backendCtxSize ); break;
+#    endif
+
+                    // Built-in: Vulkan
+                    //----------------------------------------------------------
+#    if defined( RHIO_BACKEND_VULKAN )
+                    // TODO: Implement Vulkan registration function mapping
+#    endif
+
+                    // Unsupported or uncompiled backend fallback
+                    //----------------------------------------------------------
+                default:
+                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend '%d' not compiled in", info->backend );
+                    RI_FREE( ctx );
+                    return NULL;
+                }
+
+            // Validate successful registration
+            if( regStatus != RI_SUCCESS )
+                {
+                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend registration failed (%d)", regStatus );
+                    RI_FREE( ctx );
+                    return NULL;
+                }
+
+            ctx->backendCtx = RI_CALLOC( 1, backendCtxSize );
+        }
+
+    // Backend Initialization
+    //----------------------------------------------------------
+    if( RI_UNLIKELY( ctx->backendCtx == NULL ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend context allocation failed. OOM" );
+            RI_FREE( ctx );
+            return NULL;
+        }
+
+    riStatus initStatus = ctx->funcs.init( ctx->backendCtx, &info->base );
+
+    if( initStatus != RI_SUCCESS )
+        {
+            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend initialization failed (%d)", initStatus );
+            RI_FREE( ctx->backendCtx );
+            RI_FREE( ctx );
+            return NULL;
+        }
+
+    TRACELOG( RI_LOG_INFO, "CONTEXT: Created successfully" );
+
+    return ctx;
 }
 
+// Destroy graphics context, shutdown backend, and free associated memory
 RI_API void
-rhioShutdown( void )
+rhioDestroy( riContext ctx )
 {
+    RI_GUARD_NULL_VOID( ctx );
+
+    // Safely tear down backend-specific resources
+    if( ctx->funcs.shutdown != NULL )
+        {
+            ctx->funcs.shutdown( ctx->backendCtx );
+        }
+
+    // Free allocated memory for the context hierarchy
+    RI_FREE( ctx->backendCtx );
+    RI_FREE( ctx );
+
+    TRACELOG( RI_LOG_INFO, "CONTEXT: Destroyed successfully" );
 }
 
-/** LOGGING ***********************************************************************/
+/* ---------------------------------------------------------------------------------
+ *
+ * FRAME CONTROL                                                 [>>FRAME_CONTROL<<]
+ *
+ * ---------------------------------------------------------------------------------*/
+
+// Prepare the context for a new frame's rendering commands
+RI_API void
+rhioBeginFrame( riContext ctx )
+{
+    RI_GUARD_NULL_VOID( ctx );
+    ctx->funcs.beginFrame( ctx->backendCtx );
+}
+
+// Finalize rendering commands for the current frame
+RI_API void
+rhioEndFrame( riContext ctx )
+{
+    RI_GUARD_NULL_VOID( ctx );
+    ctx->funcs.endFrame( ctx->backendCtx );
+}
+
+// Present the rendered frame to the screen
+RI_API void
+rhioPresent( riContext ctx )
+{
+    RI_GUARD_NULL_VOID( ctx );
+    ctx->funcs.present( ctx->backendCtx );
+}
+
+/* ---------------------------------------------------------------------------------
+ *
+ * LOGGING                                                             [>>LOGGING<<]
+ *
+ * ---------------------------------------------------------------------------------*/
 
 // Set the minimum log level
 RI_API void
