@@ -16,6 +16,8 @@
 // Module Functions Definition
 //----------------------------------------------------------------------------------
 
+static riContext rhioContext  = nullptr;
+
 const ExampleInfo exampleInfo = {
     .screenWidth  = 800,
     .screenHeight = 450,
@@ -25,11 +27,21 @@ const ExampleInfo exampleInfo = {
 bool
 InitExample()
 {
-    const auto initInfo = riInitInfo {
-        .appName = exampleInfo.appName,
+    const auto contextInfo = riContextInfo {
+        .base = {
+            .appName = exampleInfo.appName,
+        },
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+        .backend = RI_BACKEND_VULKAN,
+#elif defined( RHIO_EXAMPLE_OPENGL_ES_VERSION )
+        .backend = RI_BACKEND_OPENGLES,
+#else
+        .backend = RI_BACKEND_OPENGL,
+#endif
     };
 
-    return rhioInit( &initInfo );
+    rhioContext = rhioCreate( &contextInfo );
+    return rhioContext != nullptr;
 }
 
 void
@@ -45,5 +57,9 @@ OnKey( [[maybe_unused]] int key, [[maybe_unused]] int action )
 void
 ShutdownExample()
 {
-    rhioShutdown();
+    if( rhioContext != nullptr )
+        {
+            rhioDestroy( rhioContext );
+            rhioContext = nullptr;
+        }
 }
