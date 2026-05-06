@@ -119,6 +119,7 @@ target_compile_definitions(
 # Backend Dependencies
 # --------------------------------------------------------------------
 set(RHIO_BACKEND_LIBRARIES "")
+set(RHIO_PACKAGE_DEPENDENCIES "")
 
 if(NOT EMSCRIPTEN)
   if(RHIO_BACKEND_OPENGL)
@@ -127,8 +128,13 @@ if(NOT EMSCRIPTEN)
   endif()
 
   if(RHIO_BACKEND_VULKAN)
-    find_package(Vulkan REQUIRED)
-    list(APPEND RHIO_BACKEND_LIBRARIES Vulkan::Vulkan)
+    find_package(Vulkan 1.4 REQUIRED)
+    include(cmake/deps/volk.cmake)
+    list(APPEND RHIO_BACKEND_LIBRARIES Vulkan::Headers volk::volk_headers)
+    list(APPEND RHIO_PACKAGE_DEPENDENCIES "Vulkan 1.4")
+    if(RHIO_VOLK_FROM_SYSTEM)
+      list(APPEND RHIO_PACKAGE_DEPENDENCIES "volk")
+    endif()
   endif()
 
 endif()

@@ -53,3 +53,14 @@ CPMDeclarePackage(GLFW
     "GLFW_BUILD_EXAMPLES OFF"
     "GLFW_INSTALL ON"
 )
+
+# Volk
+CPMDeclarePackage(volk
+  NAME volk
+  GIT_TAG vulkan-sdk-1.4.341.0
+  GITHUB_REPOSITORY zeux/volk
+  OPTIONS
+    "VOLK_HEADERS_ONLY ON"
+    "VOLK_PULL_IN_VULKAN ON"
+    "VOLK_INSTALL OFF"
+)
