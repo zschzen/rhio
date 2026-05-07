@@ -153,8 +153,21 @@
 
 // Asserting
 #ifndef RHIO_ASSERT
-#    include <assert.h>
-#    define RHIO_ASSERT( x ) assert( x )
+#    if defined( NDEBUG )
+#        define RHIO_ASSERT( x, ... ) ( (void)0 )
+#    else
+#        include <assert.h>
+#        define RHIO_ASSERT( x, ... )                                                                                  \
+            do                                                                                                         \
+                {                                                                                                      \
+                    if( RI_UNLIKELY( !( x ) ) )                                                                        \
+                        {                                                                                              \
+                            TRACELOG( RI_LOG_FATAL, "ASSERTION FAILED: " __VA_ARGS__ );                                \
+                            assert( x );                                                                               \
+                        }                                                                                              \
+                }                                                                                                      \
+            while( 0 )
+#    endif
 #endif
 
 // Custom memory allocators
@@ -505,7 +518,13 @@ rhioCreate( const riContextInfo * info )
     // Custom backend: Caller provided a vtable hook directly
     if( info->funcs.init != NULL )
         {
-            ctx->funcs      = info->funcs;
+            ctx->funcs = info->funcs;
+
+            // Assert that the custom backend provides the minimum required functionality
+            RHIO_ASSERT( ctx->funcs.shutdown != NULL, "Custom backend must provide a shutdown function" );
+            RHIO_ASSERT( ctx->funcs.beginFrame != NULL, "Custom backend must provide a beginFrame function" );
+            RHIO_ASSERT( ctx->funcs.endFrame != NULL, "Custom backend must provide an endFrame function" );
+            RHIO_ASSERT( ctx->funcs.present != NULL, "Custom backend must provide a present function" );
 
             // Allocate baseline pointer; the caller's init() can realloc/replace as needed
             ctx->backendCtx = RI_CALLOC( 1, sizeof( void * ) );
@@ -609,6 +628,7 @@ RI_API void
 rhioBeginFrame( riContext ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
+    RHIO_ASSERT( ctx->funcs.beginFrame != NULL, "backend beginFrame is NULL" );
     ctx->funcs.beginFrame( ctx->backendCtx );
 }
 
@@ -617,6 +637,7 @@ RI_API void
 rhioEndFrame( riContext ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
+    RHIO_ASSERT( ctx->funcs.endFrame != NULL, "backend endFrame is NULL" );
     ctx->funcs.endFrame( ctx->backendCtx );
 }
 
@@ -625,6 +646,7 @@ RI_API void
 rhioPresent( riContext ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
+    RHIO_ASSERT( ctx->funcs.present != NULL, "backend present is NULL" );
     ctx->funcs.present( ctx->backendCtx );
 }
 
