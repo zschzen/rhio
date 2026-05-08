@@ -6,7 +6,7 @@
 *
 *   DESCRIPTION:
 *       A tiny, single-header rendering layer for C that abstracts
-*       OpenGL 3.3, ES 2.0/3.0, and Vulkan 1.2 behind one straightforward API.
+*       OpenGL 3.3, ES 2.0/3.0, and Vulkan 1.4 behind one straightforward API.
 *
 *   TABLE OF CONTENTS:
 *       1. Defines and Macros ...................................... [>>DEFS<<]
