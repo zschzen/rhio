@@ -40,6 +40,8 @@ AllowShortLoopsOnASingleLine: false
 AlwaysBreakAfterReturnType: AllDefinitions
 AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: MultiLine
+BreakBeforeBinaryOperators: All
+BreakBinaryOperations: OnePerLine
 BreakConstructorInitializers: BeforeComma
 
 # Braces
