@@ -17,8 +17,10 @@
 *       5. Public API Declarations ................................. [>>API<<]
 *       6. RHIO Implementation ..................................... [>>RHIO_IMPL<<]
 *          6.1 API Impl ............................................ [>>API_IMPL<<]
-*              6.1.1 Frame Control ................................. [>>FRAME<<]
-*              6.1.2 Logging ....................................... [>>LOG<<]
+*              6.1.1 Utilities ..................................... [>>UTILS<<]
+*              6.1.2 Lifecycle ...................................... [>>LIFECYCLE<<]
+*              6.1.3 Frame Control ................................. [>>FRAME<<]
+*              6.1.4 Logging ....................................... [>>LOG<<]
 *          6.2 GL Backend .......................................... [>>GL<<]
 *              6.2.1 GL Types and Structures ....................... [>>GL_TYPES<<]
 *              6.2.2 OpenGL Backend Impl ........................... [>>GL_IMPL<<]
@@ -417,6 +419,9 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 
 #pragma region "Public API declarations"
 
+// Status helpers
+RI_API const char * riStatusToString( int status );
+
 RI_API riContext rhioCreate( const riContextInfo * info );
 RI_API void      rhioDestroy( riContext ctx );
 
@@ -493,6 +498,53 @@ static riStatus _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSiz
 
 #    pragma region "API Impl"
 
+/* ---------------------------------------------------------------------------------
+ *
+ * UTILITIES                                                             [>>UTILS<<]
+ *
+ * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Utilities"
+
+RI_API const char *
+riStatusToString( int status )
+{
+    const char * str = "UNKNOWN";
+
+    switch( status )
+        {
+        default: break;
+#    define ST( s )                                                                                                    \
+    case RI_##s:                                                                                                       \
+        {                                                                                                              \
+            str = #s;                                                                                                  \
+        }                                                                                                              \
+        break
+            ST( SUCCESS );
+            ST( ERROR_INVALID_PARAM );
+            ST( ERROR_OUT_OF_MEMORY );
+            ST( ERROR_BACKEND_INIT );
+            ST( ERROR_BACKEND_UNAVAIL );
+            ST( ERROR_SHADER_COMPILE );
+            ST( ERROR_INVALID_STATE );
+            ST( ERROR_NOT_READY );
+            ST( ERROR_UNKNOWN );
+#    undef ST
+        }
+
+    return str;
+}
+
+#    pragma endregion // Utilities
+
+/* ---------------------------------------------------------------------------------
+ *
+ * LIFECYCLE                                                         [>>LIFECYCLE<<]
+ *
+ * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Lifecycle"
+
 // Create and initialize a new context instance (Caller-owned)
 // NOTE: Allocates the opaque context and resolves the backend vtable based on info.
 // Returns a valid context handle on success, or NULL and logs error on failure.
@@ -562,7 +614,8 @@ rhioCreate( const riContextInfo * info )
             // Validate successful registration
             if( regStatus != RI_SUCCESS )
                 {
-                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend registration failed (%d)", regStatus );
+                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend registration failed: %s (%d)",
+                              riStatusToString( regStatus ), regStatus );
                     RI_FREE( ctx );
                     return NULL;
                 }
@@ -583,7 +636,8 @@ rhioCreate( const riContextInfo * info )
 
     if( initStatus != RI_SUCCESS )
         {
-            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend initialization failed (%d)", initStatus );
+            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend initialization failed: %s (%d)", riStatusToString( initStatus ),
+                      initStatus );
             RI_FREE( ctx->backendCtx );
             RI_FREE( ctx );
             return NULL;
@@ -612,6 +666,8 @@ rhioDestroy( riContext ctx )
 
     TRACELOG( RI_LOG_INFO, "CONTEXT: Destroyed successfully" );
 }
+
+#    pragma endregion // Lifecycle
 
 #    pragma endregion // API Impl
 
@@ -671,7 +727,7 @@ riSetTraceLogLevel( int logType )
 RI_API void
 riTraceLog( int logType, const char * text, ... )
 {
-#    if RHIO_LOG_SUPPORT
+#    if defined( RHIO_LOG_SUPPORT )
     // Threshold message level
     if( ( rhio_logTypeLevel > logType ) || !STR_NONEMPTY( text ) ) return;
 
