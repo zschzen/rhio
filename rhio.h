@@ -453,8 +453,21 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 #        include <android/log.h>
 #    endif
 
+// Resolved backend metadata used only during device creation
+// NOTE: Registration functions fill this struct so built-in and custom backends
+// follow the same creation path.
+typedef struct riBackendDesc
+{
+    const char *   name;    // Human-readable backend name for logs
+    riBackend      backend; // Resolved backend token
+    riBackendFuncs funcs;   // Backend dispatch table
+    riSize         ctxSize; // Bytes of backend-private state RHIO should allocate
+    riFlags        flags;   // Reserved for backend capabilities/options
+
+} riBackendDesc;
+
 //----------------------------------------------------------------------------------
-// Internal context struct (hidden from callers — Handle pattern)
+// Internal device struct (hidden from callers — Handle pattern)
 //
 // The public `riDevice` typedef is `struct RI_DEVICE_STRUCT*`.  The
 // definition only exists inside RHIO_IMPLEMENTATION, so callers can never
@@ -463,9 +476,12 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 
 struct RI_DEVICE_STRUCT
 {
-    riBackend      backend;    // Which backend this context uses
-    riBackendFuncs funcs;      // The resolved vtable
-    void *         backendCtx; // Private state allocated by the backend's `init()`
+    riBackend      backend;   // Resolved backend token
+    riBackendFuncs funcs;     // Dispatch table used by public API entry points
+
+    void * backendCtx;        // Backend-private state passed to every vtable call
+
+    const char * backendName; // Stable backend name used for diagnostics
 };
 
 //----------------------------------------------------------------------------------
@@ -479,13 +495,23 @@ static TraceLogCallback rhio_traceLog     = NULL;
 // Backend registration helpers
 //----------------------------------------------------------------------------------
 
-#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
-// Populate vtable with OpenGL implementations and return context size
-static riStatus _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize );
+static void     _rhioBackendDescInit( riBackendDesc * desc );
+static riStatus _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc );
+static riStatus _rhioValidateBackendFuncs( const riBackendFuncs * funcs );
+
+// OpenGL+ES register backend funcs
+//---------------------------------------------------------------------------------
+#    if defined( RHIO_BACKEND_OPENGL )                                                                                 \
+        || defined( RHIO_BACKEND_OPENGLES )                                                                            \
+        || defined( RHIO_BACKEND_OPENGLES2 )                                                                           \
+        || defined( RHIO_BACKEND_OPENGLES3 )
+static riStatus _rhioGL_registerBackend( riBackendDesc * desc );
 #    endif
 
+// Vulkan register backend funcs
+//---------------------------------------------------------------------------------
 #    if defined( RHIO_BACKEND_VULKAN )
-// TODO: Implement Vulkan registration function mapping
+static riStatus _rhioVK_registerBackend( riBackendDesc * desc );
 #    endif
 
 // =================================================================================
@@ -545,126 +571,140 @@ riStatusToString( int status )
 
 #    pragma region "Lifecycle"
 
-// Create and initialize a new context instance (Caller-owned)
-// NOTE: Allocates the opaque context and resolves the backend vtable based on info.
-// Returns a valid context handle on success, or NULL and logs error on failure.
-RI_API riDevice
-rhioCreateDevice( const riDeviceInfo * info )
+// Create and initialize a new device instance (Caller-owned)
+RI_API riStatus
+rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 {
-    RI_GUARD_NULL( info, NULL );
+    riStatus                  status               = RI_ERROR_UNKNOWN;
+    riBackendDesc             desc                 = RI_ZERO_INIT;
+    struct RI_DEVICE_STRUCT * device               = NULL;
+    bool                      backendInitAttempted = false;
 
-    // Context Allocation
+    // Output Handle Initialization
     //----------------------------------------------------------
-    struct RI_DEVICE_STRUCT * ctx = (struct RI_DEVICE_STRUCT *)RI_CALLOC( 1, sizeof( *ctx ) );
+    RI_GUARD_NULL( outDevice, RI_ERROR_INVALID_PARAM );
+    *outDevice = NULL;
 
-    if( RI_UNLIKELY( ctx == NULL ) )
+    // Input Validation
+    //----------------------------------------------------------
+    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+
+    // Backend Descriptor Resolution
+    //----------------------------------------------------------
+    // Convert caller config into one normalized descriptor for all backend types
+    status = _rhioResolveBackendDesc( info, &desc );
+    if( status != RI_SUCCESS ) goto fail;
+
+    // Backend Vtable Validation
+    //----------------------------------------------------------
+    // Catch incomplete custom backends before allocating backend-private state
+    status = _rhioValidateBackendFuncs( &desc.funcs );
+    if( status != RI_SUCCESS ) goto fail;
+
+    // Device Allocation
+    //----------------------------------------------------------
+    device = (struct RI_DEVICE_STRUCT *)RI_CALLOC( 1, sizeof( *device ) );
+    if( RI_UNLIKELY( device == NULL ) )
         {
-            TRACELOG( RI_LOG_ERROR, "CONTEXT: Out of memory in %s", __func__ );
-            return NULL;
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Out of memory in %s", __func__ );
+            status = RI_ERROR_OUT_OF_MEMORY;
+            goto fail;
         }
 
-    // Backend Vtable Resolution
+    // Device State Initialization
     //----------------------------------------------------------
-    ctx->backend = info->backend;
+    device->backend     = desc.backend;
+    device->funcs       = desc.funcs;
+    device->backendName = desc.name;
 
-    // Custom backend: Caller provided a vtable hook directly
-    if( info->funcs.init != NULL )
+    // Backend Context Allocation
+    //----------------------------------------------------------
+    // NOTE: ctxSize == 0 is valid; the backend receives NULL and manages state elsewhere.
+    if( desc.ctxSize > 0 )
         {
-            ctx->funcs = info->funcs;
-
-            // Assert that the custom backend provides the minimum required functionality
-            RHIO_ASSERT( ctx->funcs.shutdown != NULL, "Custom backend must provide a shutdown function" );
-            RHIO_ASSERT( ctx->funcs.beginFrame != NULL, "Custom backend must provide a beginFrame function" );
-            RHIO_ASSERT( ctx->funcs.endFrame != NULL, "Custom backend must provide an endFrame function" );
-            RHIO_ASSERT( ctx->funcs.present != NULL, "Custom backend must provide a present function" );
-
-            // Allocate baseline pointer; the caller's init() can realloc/replace as needed
-            ctx->backendCtx = RI_CALLOC( 1, sizeof( void * ) );
-        }
-    // Built-in backend: Resolve from configuration
-    else
-        {
-            riU32    backendCtxSize = 0;
-            riStatus regStatus      = RI_ERROR_BACKEND_UNAVAIL;
-
-            switch( info->backend )
+            if( RI_UNLIKELY( desc.ctxSize > (riSize)( (size_t)-1 ) ) )
                 {
-
-                    // Built-in: OpenGL / OpenGL ES
-                    //----------------------------------------------------------
-#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
-                case RI_BACKEND_OPENGL:
-                case RI_BACKEND_OPENGLES: regStatus = _rhioGL_registerFuncs( &ctx->funcs, &backendCtxSize ); break;
-#    endif
-
-                    // Built-in: Vulkan
-                    //----------------------------------------------------------
-#    if defined( RHIO_BACKEND_VULKAN )
-                    // TODO: Implement Vulkan registration function mapping
-#    endif
-
-                    // Unsupported or uncompiled backend fallback
-                    //----------------------------------------------------------
-                default:
-                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend '%d' not compiled in", info->backend );
-                    RI_FREE( ctx );
-                    return NULL;
+                    TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation size is too large" );
+                    status = RI_ERROR_OUT_OF_MEMORY;
+                    goto fail;
                 }
 
-            // Validate successful registration
-            if( regStatus != RI_SUCCESS )
+            device->backendCtx = RI_CALLOC( 1, (size_t)desc.ctxSize );
+            if( RI_UNLIKELY( device->backendCtx == NULL ) )
                 {
-                    TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend registration failed: %s (%d)",
-                              riStatusToString( regStatus ), regStatus );
-                    RI_FREE( ctx );
-                    return NULL;
+                    TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation failed. OOM" );
+                    status = RI_ERROR_OUT_OF_MEMORY;
+                    goto fail;
                 }
-
-            ctx->backendCtx = RI_CALLOC( 1, backendCtxSize );
         }
 
     // Backend Initialization
     //----------------------------------------------------------
-    if( RI_UNLIKELY( ctx->backendCtx == NULL ) )
+    // Backend receives its private state plus the public application init info
+    // NOTE: shutdown is called on init failure so backends can centralize cleanup.
+    backendInitAttempted = true;
+    status               = device->funcs.init( device->backendCtx, &info->base );
+    if( status != RI_SUCCESS )
         {
-            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend context allocation failed. OOM" );
-            RI_FREE( ctx );
-            return NULL;
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Backend initialization failed: %s (%d)", riStatusToString( status ),
+                      status );
+            goto fail;
         }
 
-    riStatus initStatus = ctx->funcs.init( ctx->backendCtx, &info->base );
+    // Device Handle Handoff
+    //----------------------------------------------------------
+    *outDevice = device;
 
-    if( initStatus != RI_SUCCESS )
+    TRACELOG( RI_LOG_INFO, "DEVICE: Created successfully using %s backend",
+              STR_NONEMPTY( device->backendName ) ? device->backendName : "unknown" );
+
+    return RI_SUCCESS;
+
+fail:
+    // Failure Cleanup
+    //----------------------------------------------------------
+    if( device != NULL )
         {
-            TRACELOG( RI_LOG_ERROR, "CONTEXT: Backend initialization failed: %s (%d)", riStatusToString( initStatus ),
-                      initStatus );
-            RI_FREE( ctx->backendCtx );
-            RI_FREE( ctx );
-            return NULL;
+            if( backendInitAttempted && device->funcs.shutdown != NULL )
+                {
+                    device->funcs.shutdown( device->backendCtx );
+                }
+
+            if( device->backendCtx != NULL )
+                {
+                    RI_FREE( device->backendCtx );
+                }
+
+            RI_FREE( device );
         }
 
-    TRACELOG( RI_LOG_INFO, "CONTEXT: Created successfully" );
-
-    return ctx;
+    return status;
 }
 
-// Destroy graphics context, shutdown backend, and free associated memory
+// Destroy graphics device, shutdown backend, and free associated memory
 RI_API void
-rhioDestroyDevice( riDevice ctx )
+rhioDestroyDevice( riDevice device )
 {
-    RI_GUARD_NULL_VOID( ctx );
+    if( device == NULL ) return;
 
-    // Safely tear down backend-specific resources
-    if( ctx->funcs.shutdown != NULL )
+    // Backend Shutdown
+    //----------------------------------------------------------
+    // NOTE: shutdown receives the same private state pointer passed to init().
+    if( device->funcs.shutdown != NULL )
         {
-            ctx->funcs.shutdown( ctx->backendCtx );
+            device->funcs.shutdown( device->backendCtx );
         }
 
-    // Free allocated memory for the context hierarchy
-    RI_FREE( ctx->backendCtx );
-    RI_FREE( ctx );
+    // Device Memory Cleanup
+    //----------------------------------------------------------
+    if( device->backendCtx != NULL )
+        {
+            RI_FREE( device->backendCtx );
+        }
 
-    TRACELOG( RI_LOG_INFO, "CONTEXT: Destroyed successfully" );
+    RI_FREE( device );
+
+    TRACELOG( RI_LOG_INFO, "DEVICE: Destroyed successfully" );
 }
 
 #    pragma endregion // Lifecycle
@@ -873,16 +913,32 @@ _rhioGL_present( void * backendCtx )
     // TODO: Invoke platform-specific swap-buffers (e.g., glfwSwapBuffers)
 }
 
-// Populate the vtable with OpenGL backend implementations and return the required context size
+// Populate the backend descriptor with OpenGL implementations
 static riStatus
-_rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
+_rhioGL_registerBackend( riBackendDesc * desc )
 {
-    RI_GUARD_NULL( f, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( backendCtxSize, RI_ERROR_INVALID_PARAM );
+    riBackend backend = RI_BACKEND_OPENGL;
+
+    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+
+    // Preserve requested GL flavor before clearing the descriptor
+    if( desc->backend == RI_BACKEND_OPENGLES )
+        {
+            backend = RI_BACKEND_OPENGLES;
+        }
+
+    _rhioBackendDescInit( desc );
+
+    // Backend Descriptor Setup
+    //----------------------------------------------------------
+    desc->name    = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
+    desc->backend = backend;
+    desc->ctxSize = (riSize)sizeof( riGL_Context );
+    desc->flags   = 0;
 
     // Bind OpenGL-specific functions to the dynamic interface
     //----------------------------------------------------------
-#        define BIND_GL_FUNC( name ) f->name = _rhioGL_##name
+#        define BIND_GL_FUNC( name ) desc->funcs.name = _rhioGL_##name
 
     BIND_GL_FUNC( init );
     BIND_GL_FUNC( shutdown );
@@ -891,9 +947,6 @@ _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
     BIND_GL_FUNC( present );
 
 #        undef BIND_GL_FUNC
-
-    // Report the memory footprint required for the OpenGL context state
-    *backendCtxSize = (riU32)sizeof( riGL_Context );
 
     return RI_SUCCESS;
 }
@@ -913,7 +966,26 @@ _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
 #    pragma region "VK Backend"
 
 #    if defined( RHIO_BACKEND_VULKAN )
-// TODO: Implement Vulkan 1.4 backend
+// Fill Vulkan descriptor metadata and report it unavailable for now
+static riStatus
+_rhioVK_registerBackend( riBackendDesc * desc )
+{
+    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+
+    _rhioBackendDescInit( desc );
+
+    // Backend Descriptor Setup
+    //----------------------------------------------------------
+    // NOTE: Descriptor fields are useful for diagnostics, but creation still fails
+    // until the Vulkan vtable is implemented.
+    desc->name    = "Vulkan";
+    desc->backend = RI_BACKEND_VULKAN;
+    desc->flags   = 0;
+
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan backend registration is not implemented yet" );
+
+    return RI_ERROR_BACKEND_UNAVAIL;
+}
 #    endif
 
 #    pragma endregion
@@ -922,7 +994,100 @@ _rhioGL_registerFuncs( riBackendFuncs * f, riU32 * backendCtxSize )
 // Module Internal Functions Definition
 //----------------------------------------------------------------------------------
 
-// ...
+// Reset backend descriptor fields before registration
+static void
+_rhioBackendDescInit( riBackendDesc * desc )
+{
+    if( desc != NULL )
+        {
+            // Clear all fields before a backend writes its supported capabilities
+            riBackendDesc empty = RI_ZERO_INIT;
+            *desc               = empty;
+        }
+}
+
+// Ensure backend exposes callbacks required by the device API
+static riStatus
+_rhioValidateBackendFuncs( const riBackendFuncs * funcs )
+{
+    RI_GUARD_NULL( funcs, RI_ERROR_INVALID_PARAM );
+
+    // Required backend callbacks
+    //----------------------------------------------------------
+    // NOTE: Public API calls dispatch through these slots after device creation.
+#    define CHECK_BACKEND_FUNC( name )                                                                                 \
+        do                                                                                                             \
+            {                                                                                                          \
+                if( RI_UNLIKELY( funcs->name == NULL ) )                                                               \
+                    {                                                                                                  \
+                        TRACELOG( RI_LOG_ERROR, "BACKEND: Missing required vtable slot '%s'", #name );                 \
+                        return RI_ERROR_INVALID_PARAM;                                                                 \
+                    }                                                                                                  \
+            }                                                                                                          \
+        while( 0 )
+
+    CHECK_BACKEND_FUNC( init );
+    CHECK_BACKEND_FUNC( shutdown );
+    CHECK_BACKEND_FUNC( beginFrame );
+    CHECK_BACKEND_FUNC( endFrame );
+    CHECK_BACKEND_FUNC( present );
+
+#    undef CHECK_BACKEND_FUNC
+
+    return RI_SUCCESS;
+}
+
+// Convert device creation info into a concrete backend descriptor
+static riStatus
+_rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
+{
+    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+
+    _rhioBackendDescInit( desc );
+
+    // Custom backend
+    //----------------------------------------------------------
+    // NOTE: A custom vtable takes precedence over info->backend. Missing required
+    // slots are reported by `_rhioValidateBackendFuncs()`.
+    if( info->funcs.init != NULL )
+        {
+            desc->name    = "Custom";
+            desc->backend = RI_BACKEND_CUSTOM;
+            desc->funcs   = info->funcs;
+            desc->ctxSize = info->backendCtxSize;
+            return RI_SUCCESS;
+        }
+
+    // Built-in backend
+    //----------------------------------------------------------
+    // NOTE: Only backends compiled into this translation unit can register here.
+    switch( info->backend )
+        {
+#    if defined( RHIO_BACKEND_OPENGL )                                                                                 \
+        || defined( RHIO_BACKEND_OPENGLES )                                                                            \
+        || defined( RHIO_BACKEND_OPENGLES2 )                                                                           \
+        || defined( RHIO_BACKEND_OPENGLES3 )
+
+            // Built-in: OpenGL / OpenGL ES
+            //----------------------------------------------------------
+        case RI_BACKEND_OPENGL:
+        case RI_BACKEND_OPENGLES: desc->backend = info->backend; return _rhioGL_registerBackend( desc );
+#    endif
+
+#    if defined( RHIO_BACKEND_VULKAN )
+            // Built-in: Vulkan
+            //----------------------------------------------------------
+        case RI_BACKEND_VULKAN: desc->backend = info->backend; return _rhioVK_registerBackend( desc );
+#    endif
+
+            // Unsupported or uncompiled backend fallback
+            //----------------------------------------------------------
+        default:
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Backend '%d' is unavailable or not compiled in", info->backend );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+}
 
 #endif            // RHIO_IMPLEMENTATION
 
