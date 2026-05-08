@@ -31,7 +31,7 @@ A minimal, high-performance Rendering Hardware Interface (RHI) for a simpler wor
 
 ## Introduction
 
-**rhio** is a lightweight, single-header abstraction layer designed to unify graphics backends under a consistent vtable-based API. It enables developers to write portable rendering code without the overhead of heavy frameworks or backend-specific boilerplate.
+**rhio** is a lightweight, single-header Rendering Hardware Interface (RHI) built around an explicit device/backend contract. It enables portable rendering code without hiding backend ownership or lifecycle rules behind a heavy framework.
 
 It currently defines a unified interface for **OpenGL 3.3**, **GLES 2.0/3.0**, and **Vulkan 1.4**.
 
@@ -39,8 +39,8 @@ It currently defines a unified interface for **OpenGL 3.3**, **GLES 2.0/3.0**, a
 
 - **Header-only Architecture**: Self-contained integration; implementation via `RHIO_IMPLEMENTATION`.
 - **C99 Compliance**: Written in pure C99 for maximum portability across platforms.
-- **Backend Agnostic**: Native support for runtime backend switching.
-- **Minimal Overhead**: Thin vtable-based abstraction with a small binary footprint.
+- **Backend Selectable**: Choose the compiled backend at device creation time.
+- **Minimal Overhead**: Thin vtable dispatch with a small binary footprint.
 - **Extensible**: Straightforward vtable hooks for custom backend implementations.
 
 ## Getting Started
@@ -76,24 +76,25 @@ target_link_libraries(my_project PRIVATE rhio::rhio)
 #include "rhio.h"
 
 int main() {
-    riContextInfo info = {
-        .base = { .appName = "My App" },
-        .backend = RI_BACKEND_OPENGL
-    };
+    riDevice device = NULL;
 
-    riContext ctx = rhioCreate(&info);
-    if (ctx != RI_SUCCESS) return -1;
+    riDeviceInfo info = RI_DEVICE_INFO_INIT;
+    info.base.appName = "My App";
+    info.backend = RI_BACKEND_OPENGL;
+
+    riStatus status = rhioCreateDevice(&info, &device);
+    if (status != RI_SUCCESS) return -1;
 
     while (running) {
-        rhioBeginFrame(ctx);
+        rhioBeginFrame(device);
         {
           // Rendering logic...
         }
-        rhioEndFrame(ctx);
-        rhioPresent(ctx);
+        rhioEndFrame(device);
+        rhioPresent(device);
     }
 
-    rhioDestroy(ctx);
+    rhioDestroyDevice(device);
     return 0;
 }
 ```
@@ -102,7 +103,7 @@ int main() {
 
 - [ ] **Core Backends**: Finalize OpenGL 3.3 and GLES 3.0 driver implementations.
 - [ ] **Vulkan**: Progress towards Vulkan 1.4 compliance and validation.
-- [ ] **Resource Management**: Implement Buffer, Texture, and PSO abstractions.
+- [ ] **Resource Management**: Implement Buffer, Texture, and PSO handles.
 - [ ] **Command API**: Draw command recording and Render Pass management.
 
 ## Build Options
