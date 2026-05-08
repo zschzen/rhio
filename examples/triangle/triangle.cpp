@@ -27,21 +27,22 @@ const ExampleInfo exampleInfo = {
 bool
 InitExample()
 {
-    const auto deviceInfo = riDeviceInfo {
-        .base = {
-            .appName = exampleInfo.appName,
-        },
-#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
-        .backend = RI_BACKEND_VULKAN,
-#elif defined( RHIO_EXAMPLE_OPENGL_ES_VERSION )
-        .backend = RI_BACKEND_OPENGLES,
-#else
-        .backend = RI_BACKEND_OPENGL,
-#endif
-    };
+    // Device Configuration
+    //----------------------------------------------------------
+    // Backend is selected by the example build flags.
+    riDeviceInfo deviceInfo = {};
+    deviceInfo.base.appName = exampleInfo.appName;
 
-    rhioDevice = rhioCreate( &deviceInfo );
-    return rhioDevice != nullptr;
+// Determine backend
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    deviceInfo.backend = RI_BACKEND_VULKAN;
+#elif defined( RHIO_EXAMPLE_OPENGL_ES_VERSION )
+    deviceInfo.backend = RI_BACKEND_OPENGLES;
+#else
+    deviceInfo.backend = RI_BACKEND_OPENGL;
+#endif
+
+    return RI_SUCCESS == rhioCreateDevice( &deviceInfo, &rhioDevice );
 }
 
 void

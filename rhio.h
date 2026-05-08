@@ -5,8 +5,8 @@
 *   ▌ ▌▌▌▙▌ zlib/libpng licensed
 *
 *   DESCRIPTION:
-*       A tiny, single-header rendering layer for C that abstracts
-*       OpenGL 3.3, ES 2.0/3.0, and Vulkan 1.4 behind one straightforward API.
+*       A tiny, single-header rendering hardware interface for C that routes
+*       OpenGL 3.3, ES 2.0/3.0, and Vulkan 1.4 through one explicit device API.
 *
 *   TABLE OF CONTENTS:
 *       1. Defines and Macros ...................................... [>>DEFS<<]
@@ -422,13 +422,13 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // Status helpers
 RI_API const char * riStatusToString( int status );
 
-RI_API riDevice rhioCreateDevice( const riDeviceInfo * info );
-RI_API void      rhioDestroyDevice( riDevice ctx );
+RI_API riStatus rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice );
+RI_API void     rhioDestroyDevice( riDevice device );
 
 // Frame control
-RI_API void rhioBeginFrame( riDevice ctx );
-RI_API void rhioEndFrame( riDevice ctx );
-RI_API void rhioPresent( riDevice ctx );
+RI_API void rhioBeginFrame( riDevice device );
+RI_API void rhioEndFrame( riDevice device );
+RI_API void rhioPresent( riDevice device );
 
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
