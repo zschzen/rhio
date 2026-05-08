@@ -13,7 +13,7 @@
 *       2. Enumerations ............................................ [>>ENUMS<<]
 *       3. Opaque Resource Handles ................................. [>>HANDLES<<]
 *       4. Types and Structures Definition ......................... [>>TYPES<<]
-*          4.1 Context Creation Info ............................... [>>CTX_INFO<<]
+*          4.1 Context Creation Info ............................... [>>DEVICE_INFO<<]
 *       5. Public API Declarations ................................. [>>API<<]
 *       6. RHIO Implementation ..................................... [>>RHIO_IMPL<<]
 *          6.1 API Impl ............................................ [>>API_IMPL<<]
@@ -302,7 +302,7 @@ typedef enum
 #pragma region "Opaque resource handles"
 
 // The main RHI context NOTE: Caller-Owned Instance
-typedef struct RI_CONTEXT_STRUCT * riContext;
+typedef struct RI_DEVICE_STRUCT * riDevice;
 
 #pragma endregion
 
@@ -344,7 +344,7 @@ typedef struct
 //   - Swap backends at runtime without touching the public API
 //   - Unit-test rendering code with a mock backend
 //   - Add new backends without modifying existing backend code
-// Backend authors fill this struct and pass it to `rhioCreate()` via riContextInfo.
+// Backend authors fill this struct and pass it to `rhioCreateDevice()` via riDeviceInfo.
 // Built-in backends (OpenGL, Vulkan) are registered automatically.
 typedef struct riBackendFuncs
 {
@@ -364,7 +364,7 @@ typedef struct riBackendFuncs
 } riBackendFuncs;
 
 //----------------------------------------------------------------------------------
-// Context creation info                                              [>>CTX_INFO<<]
+// Context creation info                                              [>>DEVICE_INFO<<]
 //----------------------------------------------------------------------------------
 
 // Context Initialization Information
@@ -372,13 +372,13 @@ typedef struct riBackendFuncs
 // If `funcs.init` is set, the built-in backend selection
 // is bypassed and the custom vtable is used directly;
 // set `backend` to `RI_BACKEND_CUSTOM`.
-typedef struct riContextInfo
+typedef struct riDeviceInfo
 {
     riInitInfo     base;    // Basic application info (App name, API version)
     riBackend      backend; // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
     riBackendFuncs funcs;   // Dynamic interface hook for custom backend vtable
 
-} riContextInfo;
+} riDeviceInfo;
 
 #pragma endregion // Types and Structures Definition
 
@@ -422,13 +422,13 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // Status helpers
 RI_API const char * riStatusToString( int status );
 
-RI_API riContext rhioCreate( const riContextInfo * info );
-RI_API void      rhioDestroy( riContext ctx );
+RI_API riDevice rhioCreateDevice( const riDeviceInfo * info );
+RI_API void      rhioDestroyDevice( riDevice ctx );
 
 // Frame control
-RI_API void rhioBeginFrame( riContext ctx );
-RI_API void rhioEndFrame( riContext ctx );
-RI_API void rhioPresent( riContext ctx );
+RI_API void rhioBeginFrame( riDevice ctx );
+RI_API void rhioEndFrame( riDevice ctx );
+RI_API void rhioPresent( riDevice ctx );
 
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
@@ -456,12 +456,12 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 //----------------------------------------------------------------------------------
 // Internal context struct (hidden from callers — Handle pattern)
 //
-// The public `riContext` typedef is `struct RI_CONTEXT_STRUCT*`.  The
+// The public `riDevice` typedef is `struct RI_DEVICE_STRUCT*`.  The
 // definition only exists inside RHIO_IMPLEMENTATION, so callers can never
 // peek at the members.
 //----------------------------------------------------------------------------------
 
-struct RI_CONTEXT_STRUCT
+struct RI_DEVICE_STRUCT
 {
     riBackend      backend;    // Which backend this context uses
     riBackendFuncs funcs;      // The resolved vtable
@@ -548,14 +548,14 @@ riStatusToString( int status )
 // Create and initialize a new context instance (Caller-owned)
 // NOTE: Allocates the opaque context and resolves the backend vtable based on info.
 // Returns a valid context handle on success, or NULL and logs error on failure.
-RI_API riContext
-rhioCreate( const riContextInfo * info )
+RI_API riDevice
+rhioCreateDevice( const riDeviceInfo * info )
 {
     RI_GUARD_NULL( info, NULL );
 
     // Context Allocation
     //----------------------------------------------------------
-    struct RI_CONTEXT_STRUCT * ctx = (struct RI_CONTEXT_STRUCT *)RI_CALLOC( 1, sizeof( *ctx ) );
+    struct RI_DEVICE_STRUCT * ctx = (struct RI_DEVICE_STRUCT *)RI_CALLOC( 1, sizeof( *ctx ) );
 
     if( RI_UNLIKELY( ctx == NULL ) )
         {
@@ -650,7 +650,7 @@ rhioCreate( const riContextInfo * info )
 
 // Destroy graphics context, shutdown backend, and free associated memory
 RI_API void
-rhioDestroy( riContext ctx )
+rhioDestroyDevice( riDevice ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
 
@@ -681,7 +681,7 @@ rhioDestroy( riContext ctx )
 
 // Prepare the context for a new frame's rendering commands
 RI_API void
-rhioBeginFrame( riContext ctx )
+rhioBeginFrame( riDevice ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
     RHIO_ASSERT( ctx->funcs.beginFrame != NULL, "backend beginFrame is NULL" );
@@ -690,7 +690,7 @@ rhioBeginFrame( riContext ctx )
 
 // Finalize rendering commands for the current frame
 RI_API void
-rhioEndFrame( riContext ctx )
+rhioEndFrame( riDevice ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
     RHIO_ASSERT( ctx->funcs.endFrame != NULL, "backend endFrame is NULL" );
@@ -699,7 +699,7 @@ rhioEndFrame( riContext ctx )
 
 // Present the rendered frame to the screen
 RI_API void
-rhioPresent( riContext ctx )
+rhioPresent( riDevice ctx )
 {
     RI_GUARD_NULL_VOID( ctx );
     RHIO_ASSERT( ctx->funcs.present != NULL, "backend present is NULL" );

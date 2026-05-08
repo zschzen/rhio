@@ -16,7 +16,7 @@
 // Module Functions Definition
 //----------------------------------------------------------------------------------
 
-static riContext rhioContext  = nullptr;
+static riDevice rhioDevice    = nullptr;
 
 const ExampleInfo exampleInfo = {
     .screenWidth  = 800,
@@ -27,7 +27,7 @@ const ExampleInfo exampleInfo = {
 bool
 InitExample()
 {
-    const auto contextInfo = riContextInfo {
+    const auto deviceInfo = riDeviceInfo {
         .base = {
             .appName = exampleInfo.appName,
         },
@@ -40,8 +40,8 @@ InitExample()
 #endif
     };
 
-    rhioContext = rhioCreate( &contextInfo );
-    return rhioContext != nullptr;
+    rhioDevice = rhioCreate( &deviceInfo );
+    return rhioDevice != nullptr;
 }
 
 void
@@ -57,9 +57,9 @@ OnKey( [[maybe_unused]] int key, [[maybe_unused]] int action )
 void
 ShutdownExample()
 {
-    if( rhioContext != nullptr )
+    if( rhioDevice != nullptr )
         {
-            rhioDestroy( rhioContext );
-            rhioContext = nullptr;
+            rhioDestroyDevice( rhioDevice );
+            rhioDevice = nullptr;
         }
 }
