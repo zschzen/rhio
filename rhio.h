@@ -377,6 +377,7 @@ typedef struct riDeviceInfo
     riInitInfo     base;    // Basic application info (App name, API version)
     riBackend      backend; // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
     riBackendFuncs funcs;   // Dynamic interface hook for custom backend vtable
+    riSize         backendCtxSize; // Bytes of backend-private state RHIO should allocate for custom backends
 
 } riDeviceInfo;
 
