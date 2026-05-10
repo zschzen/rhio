@@ -374,9 +374,9 @@ typedef struct riBackendFuncs
 // set `backend` to `RI_BACKEND_CUSTOM`.
 typedef struct riDeviceInfo
 {
-    riInitInfo     base;    // Basic application info (App name, API version)
-    riBackend      backend; // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
-    riBackendFuncs funcs;   // Dynamic interface hook for custom backend vtable
+    riInitInfo     base;              // Basic application info (App name, API version)
+    riBackend      backend;           // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
+    riBackendFuncs funcs;             // Dynamic interface hook for custom backend vtable
     riSize         backendDeviceSize; // Bytes of backend-private state RHIO should allocate for custom backends
 
 } riDeviceInfo;
@@ -459,11 +459,11 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 // follow the same creation path.
 typedef struct riBackendDesc
 {
-    const char *   name;    // Human-readable backend name for logs
-    riBackend      backend; // Resolved backend token
-    riBackendFuncs funcs;   // Backend dispatch table
+    const char *   name;       // Human-readable backend name for logs
+    riBackend      backend;    // Resolved backend token
+    riBackendFuncs funcs;      // Backend dispatch table
     riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
-    riFlags        flags;   // Reserved for backend capabilities/options
+    riFlags        flags;      // Reserved for backend capabilities/options
 
 } riBackendDesc;
 
@@ -480,7 +480,7 @@ struct RI_DEVICE_STRUCT
     riBackend      backend;   // Resolved backend token
     riBackendFuncs funcs;     // Dispatch table used by public API entry points
 
-    void * backendDevice;        // Backend-private state passed to every vtable call
+    void * backendDevice;     // Backend-private state passed to every vtable call
 
     const char * backendName; // Stable backend name used for diagnostics
 };
@@ -932,10 +932,10 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 
     // Backend Descriptor Setup
     //----------------------------------------------------------
-    desc->name    = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
-    desc->backend = backend;
+    desc->name       = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
+    desc->backend    = backend;
     desc->deviceSize = (riSize)sizeof( riGL_Device );
-    desc->flags   = 0;
+    desc->flags      = 0;
 
     // Bind OpenGL-specific functions to the dynamic interface
     //----------------------------------------------------------
@@ -1053,9 +1053,9 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
     // slots are reported by `_rhioValidateBackendFuncs()`.
     if( info->funcs.init != NULL )
         {
-            desc->name    = "Custom";
-            desc->backend = RI_BACKEND_CUSTOM;
-            desc->funcs   = info->funcs;
+            desc->name       = "Custom";
+            desc->backend    = RI_BACKEND_CUSTOM;
+            desc->funcs      = info->funcs;
             desc->deviceSize = info->backendDeviceSize;
             return RI_SUCCESS;
         }
