@@ -13,12 +13,12 @@
 *       2. Enumerations ............................................ [>>ENUMS<<]
 *       3. Opaque Resource Handles ................................. [>>HANDLES<<]
 *       4. Types and Structures Definition ......................... [>>TYPES<<]
-*          4.1 Context Creation Info ............................... [>>DEVICE_INFO<<]
+*          4.1 Device Creation Info ............................... [>>DEVICE_INFO<<]
 *       5. Public API Declarations ................................. [>>API<<]
 *       6. RHIO Implementation ..................................... [>>RHIO_IMPL<<]
 *          6.1 API Impl ............................................ [>>API_IMPL<<]
 *              6.1.1 Utilities ..................................... [>>UTILS<<]
-*              6.1.2 Lifecycle ...................................... [>>LIFECYCLE<<]
+*              6.1.2 Lifecycle ..................................... [>>LIFECYCLE<<]
 *              6.1.3 Frame Control ................................. [>>FRAME<<]
 *              6.1.4 Logging ....................................... [>>LOG<<]
 *          6.2 GL Backend .......................................... [>>GL<<]
@@ -284,10 +284,10 @@ typedef enum
     RI_SUCCESS = 0,           // Operation completed successfully
     RI_ERROR_INVALID_PARAM,   // A required argument was NULL or out of range
     RI_ERROR_OUT_OF_MEMORY,   // Heap allocation failed
-    RI_ERROR_BACKEND_INIT,    // The backend failed to initialise
+    RI_ERROR_BACKEND_INIT,    // The backend failed to initialize
     RI_ERROR_BACKEND_UNAVAIL, // Requested backend not compiled in / not supported
     RI_ERROR_SHADER_COMPILE,  // Shader source / SPIR-V could not be compiled/linked
-    RI_ERROR_INVALID_STATE,   // Function called in wrong context (e.g. no active pass)
+    RI_ERROR_INVALID_STATE,   // Function called in invalid device state (e.g. no active pass)
     RI_ERROR_NOT_READY,       // Resource not yet ready (async / swapchain)
     RI_ERROR_UNKNOWN,         // Catch-all. check logs for details
 
@@ -301,7 +301,7 @@ typedef enum
 
 #pragma region "Opaque resource handles"
 
-// The main RHI context NOTE: Caller-Owned Instance
+// The main RHI device NOTE: Caller-Owned Instance
 typedef struct RI_DEVICE_STRUCT * riDevice;
 
 #pragma endregion
@@ -350,25 +350,25 @@ typedef struct riBackendFuncs
 {
     // Lifecycle Management
     //------------------------------------------------------------------------------
-    riStatus ( *init )( void * backendCtx, const riInitInfo * info ); // Initialize the backend graphics context
-    void     ( *shutdown )( void * backendCtx );                      // Tear down backend resources and free memory
+    riStatus ( *init )( void * backendDevice, const riInitInfo * info ); // Initialize the backend graphics context
+    void     ( *shutdown )( void * backendDevice );                      // Tear down backend resources and free memory
 
     // Frame Control Operations
     //------------------------------------------------------------------------------
-    void ( *beginFrame )( void * backendCtx ); // Begin recording commands for the current frame
-    void ( *endFrame )( void * backendCtx );   // End recording commands and submit to GPU
-    void ( *present )( void * backendCtx );    // Present the final frame buffer to the screen
+    void ( *beginFrame )( void * backendDevice ); // Begin recording commands for the current frame
+    void ( *endFrame )( void * backendDevice );   // End recording commands and submit to GPU
+    void ( *present )( void * backendDevice );    // Present the final frame buffer to the screen
 
     //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
 
 } riBackendFuncs;
 
 //----------------------------------------------------------------------------------
-// Context creation info                                              [>>DEVICE_INFO<<]
+// Device creation info                                              [>>DEVICE_INFO<<]
 //----------------------------------------------------------------------------------
 
-// Context Initialization Information
-// NOTE: Holds configuration for creating a rendering context.
+// Device Initialization Information
+// NOTE: Holds configuration for creating a rendering device.
 // If `funcs.init` is set, the built-in backend selection
 // is bypassed and the custom vtable is used directly;
 // set `backend` to `RI_BACKEND_CUSTOM`.
@@ -377,7 +377,7 @@ typedef struct riDeviceInfo
     riInitInfo     base;    // Basic application info (App name, API version)
     riBackend      backend; // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
     riBackendFuncs funcs;   // Dynamic interface hook for custom backend vtable
-    riSize         backendCtxSize; // Bytes of backend-private state RHIO should allocate for custom backends
+    riSize         backendDeviceSize; // Bytes of backend-private state RHIO should allocate for custom backends
 
 } riDeviceInfo;
 
@@ -462,7 +462,7 @@ typedef struct riBackendDesc
     const char *   name;    // Human-readable backend name for logs
     riBackend      backend; // Resolved backend token
     riBackendFuncs funcs;   // Backend dispatch table
-    riSize         ctxSize; // Bytes of backend-private state RHIO should allocate
+    riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
     riFlags        flags;   // Reserved for backend capabilities/options
 
 } riBackendDesc;
@@ -480,7 +480,7 @@ struct RI_DEVICE_STRUCT
     riBackend      backend;   // Resolved backend token
     riBackendFuncs funcs;     // Dispatch table used by public API entry points
 
-    void * backendCtx;        // Backend-private state passed to every vtable call
+    void * backendDevice;        // Backend-private state passed to every vtable call
 
     const char * backendName; // Stable backend name used for diagnostics
 };
@@ -620,18 +620,18 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 
     // Backend Context Allocation
     //----------------------------------------------------------
-    // NOTE: ctxSize == 0 is valid; the backend receives NULL and manages state elsewhere.
-    if( desc.ctxSize > 0 )
+    // NOTE: deviceSize == 0 is valid; the backend receives NULL and manages state elsewhere.
+    if( desc.deviceSize > 0 )
         {
-            if( RI_UNLIKELY( desc.ctxSize > (riSize)( (size_t)-1 ) ) )
+            if( RI_UNLIKELY( desc.deviceSize > (riSize)( (size_t)-1 ) ) )
                 {
                     TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation size is too large" );
                     status = RI_ERROR_OUT_OF_MEMORY;
                     goto fail;
                 }
 
-            device->backendCtx = RI_CALLOC( 1, (size_t)desc.ctxSize );
-            if( RI_UNLIKELY( device->backendCtx == NULL ) )
+            device->backendDevice = RI_CALLOC( 1, (size_t)desc.deviceSize );
+            if( RI_UNLIKELY( device->backendDevice == NULL ) )
                 {
                     TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation failed. OOM" );
                     status = RI_ERROR_OUT_OF_MEMORY;
@@ -644,7 +644,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Backend receives its private state plus the public application init info
     // NOTE: shutdown is called on init failure so backends can centralize cleanup.
     backendInitAttempted = true;
-    status               = device->funcs.init( device->backendCtx, &info->base );
+    status               = device->funcs.init( device->backendDevice, &info->base );
     if( status != RI_SUCCESS )
         {
             TRACELOG( RI_LOG_ERROR, "DEVICE: Backend initialization failed: %s (%d)", riStatusToString( status ),
@@ -668,12 +668,12 @@ fail:
         {
             if( backendInitAttempted && device->funcs.shutdown != NULL )
                 {
-                    device->funcs.shutdown( device->backendCtx );
+                    device->funcs.shutdown( device->backendDevice );
                 }
 
-            if( device->backendCtx != NULL )
+            if( device->backendDevice != NULL )
                 {
-                    RI_FREE( device->backendCtx );
+                    RI_FREE( device->backendDevice );
                 }
 
             RI_FREE( device );
@@ -693,14 +693,14 @@ rhioDestroyDevice( riDevice device )
     // NOTE: shutdown receives the same private state pointer passed to init().
     if( device->funcs.shutdown != NULL )
         {
-            device->funcs.shutdown( device->backendCtx );
+            device->funcs.shutdown( device->backendDevice );
         }
 
     // Device Memory Cleanup
     //----------------------------------------------------------
-    if( device->backendCtx != NULL )
+    if( device->backendDevice != NULL )
         {
-            RI_FREE( device->backendCtx );
+            RI_FREE( device->backendDevice );
         }
 
     RI_FREE( device );
@@ -720,31 +720,31 @@ rhioDestroyDevice( riDevice device )
 
 #    pragma region "Frame Control"
 
-// Prepare the context for a new frame's rendering commands
+// Prepare the device for a new frame's rendering commands
 RI_API void
-rhioBeginFrame( riDevice ctx )
+rhioBeginFrame( riDevice device )
 {
-    RI_GUARD_NULL_VOID( ctx );
-    RHIO_ASSERT( ctx->funcs.beginFrame != NULL, "backend beginFrame is NULL" );
-    ctx->funcs.beginFrame( ctx->backendCtx );
+    RI_GUARD_NULL_VOID( device );
+    RHIO_ASSERT( device->funcs.beginFrame != NULL, "backend beginFrame is NULL" );
+    device->funcs.beginFrame( device->backendDevice );
 }
 
 // Finalize rendering commands for the current frame
 RI_API void
-rhioEndFrame( riDevice ctx )
+rhioEndFrame( riDevice device )
 {
-    RI_GUARD_NULL_VOID( ctx );
-    RHIO_ASSERT( ctx->funcs.endFrame != NULL, "backend endFrame is NULL" );
-    ctx->funcs.endFrame( ctx->backendCtx );
+    RI_GUARD_NULL_VOID( device );
+    RHIO_ASSERT( device->funcs.endFrame != NULL, "backend endFrame is NULL" );
+    device->funcs.endFrame( device->backendDevice );
 }
 
 // Present the rendered frame to the screen
 RI_API void
-rhioPresent( riDevice ctx )
+rhioPresent( riDevice device )
 {
-    RI_GUARD_NULL_VOID( ctx );
-    RHIO_ASSERT( ctx->funcs.present != NULL, "backend present is NULL" );
-    ctx->funcs.present( ctx->backendCtx );
+    RI_GUARD_NULL_VOID( device );
+    RHIO_ASSERT( device->funcs.present != NULL, "backend present is NULL" );
+    device->funcs.present( device->backendDevice );
 }
 
 #    pragma endregion
@@ -851,12 +851,12 @@ riSetTraceLogCallback( TraceLogCallback callback )
 // Types and Structures Definition                                    [>>GL_TYPES<<]
 //----------------------------------------------------------------------------------
 
-// Internal OpenGL context state
-typedef struct riGL_Context
+// Internal OpenGL device state
+typedef struct riGL_Device
 {
     int dummyPlaceholder; // TODO: Replace with actual OpenGL resource handles
 
-} riGL_Context;
+} riGL_Device;
 
 //----------------------------------------------------------------------------------
 // OpenGL Backend Implementation (Stubs)                               [>>GL_IMPL<<]
@@ -864,9 +864,9 @@ typedef struct riGL_Context
 
 // Initialize OpenGL state and allocate default resources
 static riStatus
-_rhioGL_init( void * backendCtx, const riInitInfo * info )
+_rhioGL_init( void * backendDevice, const riInitInfo * info )
 {
-    UNUSED( backendCtx );
+    UNUSED( backendDevice );
     UNUSED( info );
 
     // TODO: Initialize GL state, load extensions, create default VAO, etc.
@@ -876,11 +876,11 @@ _rhioGL_init( void * backendCtx, const riInitInfo * info )
     return RI_SUCCESS;
 }
 
-// Free OpenGL resources and tear down context state
+// Free OpenGL resources and tear down device state
 static void
-_rhioGL_shutdown( void * backendCtx )
+_rhioGL_shutdown( void * backendDevice )
 {
-    UNUSED( backendCtx );
+    UNUSED( backendDevice );
 
     // TODO: Delete allocated GL resources (buffers, textures, shaders)
 
@@ -889,27 +889,27 @@ _rhioGL_shutdown( void * backendCtx )
 
 // Prepare OpenGL state for a new frame's rendering commands
 static void
-_rhioGL_beginFrame( void * backendCtx )
+_rhioGL_beginFrame( void * backendDevice )
 {
-    UNUSED( backendCtx );
+    UNUSED( backendDevice );
 
     // TODO: Reset per-frame scratch allocators and bind default states
 }
 
 // Finalize OpenGL rendering commands for the current frame
 static void
-_rhioGL_endFrame( void * backendCtx )
+_rhioGL_endFrame( void * backendDevice )
 {
-    UNUSED( backendCtx );
+    UNUSED( backendDevice );
 
     // TODO: Flush command queues if batching is implemented
 }
 
 // Display the rendered frame to the screen
 static void
-_rhioGL_present( void * backendCtx )
+_rhioGL_present( void * backendDevice )
 {
-    UNUSED( backendCtx );
+    UNUSED( backendDevice );
 
     // TODO: Invoke platform-specific swap-buffers (e.g., glfwSwapBuffers)
 }
@@ -934,7 +934,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     //----------------------------------------------------------
     desc->name    = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
     desc->backend = backend;
-    desc->ctxSize = (riSize)sizeof( riGL_Context );
+    desc->deviceSize = (riSize)sizeof( riGL_Device );
     desc->flags   = 0;
 
     // Bind OpenGL-specific functions to the dynamic interface
@@ -1056,7 +1056,7 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
             desc->name    = "Custom";
             desc->backend = RI_BACKEND_CUSTOM;
             desc->funcs   = info->funcs;
-            desc->ctxSize = info->backendCtxSize;
+            desc->deviceSize = info->backendDeviceSize;
             return RI_SUCCESS;
         }
 
