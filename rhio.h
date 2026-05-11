@@ -647,8 +647,8 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     status               = device->funcs.init( device->backendDevice, &info->base );
     if( status != RI_SUCCESS )
         {
-            TRACELOG( RI_LOG_ERROR, "DEVICE: Backend initialization failed: %s (%d)", riStatusToString( status ),
-                      status );
+            TRACELOG(
+                RI_LOG_ERROR, "DEVICE: Backend initialization failed: %s (%d)", riStatusToString( status ), status );
             goto fail;
         }
 
@@ -656,7 +656,8 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     //----------------------------------------------------------
     *outDevice = device;
 
-    TRACELOG( RI_LOG_INFO, "DEVICE: Created successfully using %s backend",
+    TRACELOG( RI_LOG_INFO,
+              "DEVICE: Created successfully using %s backend",
               STR_NONEMPTY( device->backendName ) ? device->backendName : "unknown" );
 
     return RI_SUCCESS;
