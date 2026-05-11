@@ -919,6 +919,22 @@ _rhioGL_present( void * backendDevice )
     // TODO: Invoke platform-specific swap-buffers (e.g., glfwSwapBuffers)
 }
 
+//----------------------------------------------------------------------------------
+// OpenGL Backend Function Table
+//----------------------------------------------------------------------------------
+#        define BIND_FUNC( name ) .name = _rhioGL_##name
+
+static const riBackendFuncs s_gl_vtable = {
+    BIND_FUNC( init ),
+    BIND_FUNC( shutdown ),
+
+    BIND_FUNC( beginFrame ),
+    BIND_FUNC( endFrame ),
+    BIND_FUNC( present ),
+};
+
+#        undef BIND_FUNC
+
 // Populate the backend descriptor with OpenGL implementations
 static riStatus
 _rhioGL_registerBackend( riBackendDesc * desc )
@@ -940,19 +956,8 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     desc->name       = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
     desc->backend    = backend;
     desc->deviceSize = (riSize)sizeof( riGL_Device );
+    desc->vtable     = s_gl_vtable;
     desc->flags      = 0;
-
-    // Bind OpenGL-specific functions to the dynamic interface
-    //----------------------------------------------------------
-#        define BIND_GL_FUNC( name ) desc->funcs.name = _rhioGL_##name
-
-    BIND_GL_FUNC( init );
-    BIND_GL_FUNC( shutdown );
-    BIND_GL_FUNC( beginFrame );
-    BIND_GL_FUNC( endFrame );
-    BIND_GL_FUNC( present );
-
-#        undef BIND_GL_FUNC
 
     return RI_SUCCESS;
 }
@@ -972,7 +977,17 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 #    pragma region "VK Backend"
 
 #    if defined( RHIO_BACKEND_VULKAN )
-// Fill Vulkan descriptor metadata and report it unavailable for now
+
+//----------------------------------------------------------------------------------
+// Vulkan Backend Function Table
+//----------------------------------------------------------------------------------
+#        define BIND_FUNC( name ) .name = _rhioVK_##name
+
+static const riBackendFuncs s_vk_vtable = RI_ZERO_INIT;
+
+#        undef BIND_FUNC
+
+// Fill Vulkan descriptor metadata
 static riStatus
 _rhioVK_registerBackend( riBackendDesc * desc )
 {
@@ -982,10 +997,9 @@ _rhioVK_registerBackend( riBackendDesc * desc )
 
     // Backend Descriptor Setup
     //----------------------------------------------------------
-    // NOTE: Descriptor fields are useful for diagnostics, but creation still fails
-    // until the Vulkan vtable is implemented.
     desc->name    = "Vulkan";
     desc->backend = RI_BACKEND_VULKAN;
+    desc->vtable  = s_vk_vtable;
     desc->flags   = 0;
 
     TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan backend registration is not implemented yet" );
@@ -1039,6 +1053,9 @@ _rhioValidateBackendFuncs( const riBackendFuncs * funcs )
     CHECK_BACKEND_FUNC( present );
 
 #    undef CHECK_BACKEND_FUNC
+
+    // TODO: Validate required resource dispatch slots here when buffers,
+    // textures, samplers, shaders, render passes, and command lists are added.
 
     return RI_SUCCESS;
 }
