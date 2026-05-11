@@ -461,7 +461,7 @@ typedef struct riBackendDesc
 {
     const char *   name;       // Human-readable backend name for logs
     riBackend      backend;    // Resolved backend token
-    riBackendFuncs funcs;      // Backend dispatch table
+    riBackendFuncs vtable;     // Backend dispatch table
     riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
     riFlags        flags;      // Reserved for backend capabilities/options
 
@@ -599,7 +599,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Backend Vtable Validation
     //----------------------------------------------------------
     // Catch incomplete custom backends before allocating backend-private state
-    status = _rhioValidateBackendFuncs( &desc.funcs );
+    status = _rhioValidateBackendFuncs( &desc.vtable );
     if( status != RI_SUCCESS ) goto fail;
 
     // Device Allocation
@@ -615,7 +615,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Device State Initialization
     //----------------------------------------------------------
     device->backend     = desc.backend;
-    device->funcs       = desc.funcs;
+    device->funcs       = desc.vtable;
     device->backendName = desc.name;
 
     // Backend Context Allocation
@@ -1060,7 +1060,7 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
         {
             desc->name       = "Custom";
             desc->backend    = RI_BACKEND_CUSTOM;
-            desc->funcs      = info->funcs;
+            desc->vtable     = info->funcs;
             desc->deviceSize = info->backendDeviceSize;
             return RI_SUCCESS;
         }
