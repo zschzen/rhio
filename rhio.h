@@ -824,6 +824,10 @@ riTraceLog( int logType, const char * text, ... )
     va_end( args );
 
     if( RI_LOG_FATAL == logType ) exit( EXIT_FAILURE );
+
+#    else
+    UNUSED( logType );
+    UNUSED( text );
 #    endif /* RHIO_LOG_SUPPORT */
 }
 
