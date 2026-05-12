@@ -353,12 +353,6 @@ typedef struct riBackendFuncs
     riStatus ( *init )( void * backendDevice, const riInitInfo * info ); // Initialize the backend graphics context
     void     ( *shutdown )( void * backendDevice );                      // Tear down backend resources and free memory
 
-    // Frame Control Operations
-    //------------------------------------------------------------------------------
-    void ( *beginFrame )( void * backendDevice ); // Begin recording commands for the current frame
-    void ( *endFrame )( void * backendDevice );   // End recording commands and submit to GPU
-    void ( *present )( void * backendDevice );    // Present the final frame buffer to the screen
-
     //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
 
 } riBackendFuncs;
@@ -425,11 +419,6 @@ RI_API const char * riStatusToString( int status );
 
 RI_API riStatus rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice );
 RI_API void     rhioDestroyDevice( riDevice device );
-
-// Frame control
-RI_API void rhioBeginFrame( riDevice device );
-RI_API void rhioEndFrame( riDevice device );
-RI_API void rhioPresent( riDevice device );
 
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
@@ -715,43 +704,6 @@ rhioDestroyDevice( riDevice device )
 
 /* ---------------------------------------------------------------------------------
  *
- * FRAME CONTROL                                                         [>>FRAME<<]
- *
- * ---------------------------------------------------------------------------------*/
-
-#    pragma region "Frame Control"
-
-// Prepare the device for a new frame's rendering commands
-RI_API void
-rhioBeginFrame( riDevice device )
-{
-    RI_GUARD_NULL_VOID( device );
-    RHIO_ASSERT( device->funcs.beginFrame != NULL, "backend beginFrame is NULL" );
-    device->funcs.beginFrame( device->backendDevice );
-}
-
-// Finalize rendering commands for the current frame
-RI_API void
-rhioEndFrame( riDevice device )
-{
-    RI_GUARD_NULL_VOID( device );
-    RHIO_ASSERT( device->funcs.endFrame != NULL, "backend endFrame is NULL" );
-    device->funcs.endFrame( device->backendDevice );
-}
-
-// Present the rendered frame to the screen
-RI_API void
-rhioPresent( riDevice device )
-{
-    RI_GUARD_NULL_VOID( device );
-    RHIO_ASSERT( device->funcs.present != NULL, "backend present is NULL" );
-    device->funcs.present( device->backendDevice );
-}
-
-#    pragma endregion
-
-/* ---------------------------------------------------------------------------------
- *
  * LOGGING                                                                 [>>LOG<<]
  *
  * ---------------------------------------------------------------------------------*/
@@ -892,33 +844,6 @@ _rhioGL_shutdown( void * backendDevice )
     TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete (stub)" );
 }
 
-// Prepare OpenGL state for a new frame's rendering commands
-static void
-_rhioGL_beginFrame( void * backendDevice )
-{
-    UNUSED( backendDevice );
-
-    // TODO: Reset per-frame scratch allocators and bind default states
-}
-
-// Finalize OpenGL rendering commands for the current frame
-static void
-_rhioGL_endFrame( void * backendDevice )
-{
-    UNUSED( backendDevice );
-
-    // TODO: Flush command queues if batching is implemented
-}
-
-// Display the rendered frame to the screen
-static void
-_rhioGL_present( void * backendDevice )
-{
-    UNUSED( backendDevice );
-
-    // TODO: Invoke platform-specific swap-buffers (e.g., glfwSwapBuffers)
-}
-
 //----------------------------------------------------------------------------------
 // OpenGL Backend Function Table
 //----------------------------------------------------------------------------------
@@ -927,10 +852,6 @@ _rhioGL_present( void * backendDevice )
 static const riBackendFuncs s_gl_vtable = {
     BIND_FUNC( init ),
     BIND_FUNC( shutdown ),
-
-    BIND_FUNC( beginFrame ),
-    BIND_FUNC( endFrame ),
-    BIND_FUNC( present ),
 };
 
 #        undef BIND_FUNC
@@ -1048,9 +969,6 @@ _rhioValidateBackendFuncs( const riBackendFuncs * funcs )
 
     CHECK_BACKEND_FUNC( init );
     CHECK_BACKEND_FUNC( shutdown );
-    CHECK_BACKEND_FUNC( beginFrame );
-    CHECK_BACKEND_FUNC( endFrame );
-    CHECK_BACKEND_FUNC( present );
 
 #    undef CHECK_BACKEND_FUNC
 
