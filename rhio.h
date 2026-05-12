@@ -358,7 +358,7 @@ typedef struct riBackendFuncs
 } riBackendFuncs;
 
 //----------------------------------------------------------------------------------
-// Device creation info                                              [>>DEVICE_INFO<<]
+// Device creation info                                            [>>DEVICE_INFO<<]
 //----------------------------------------------------------------------------------
 
 // Device Initialization Information
@@ -417,6 +417,7 @@ typedef void ( *TraceLogCallback )( int logType, const char * text, va_list args
 // Status helpers
 RI_API const char * riStatusToString( int status );
 
+// Lifecycle
 RI_API riStatus rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice );
 RI_API void     rhioDestroyDevice( riDevice device );
 
