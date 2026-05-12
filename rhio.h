@@ -13,7 +13,7 @@
 *       2. Enumerations ............................................ [>>ENUMS<<]
 *       3. Opaque Resource Handles ................................. [>>HANDLES<<]
 *       4. Types and Structures Definition ......................... [>>TYPES<<]
-*          4.1 Device Creation Info ............................... [>>DEVICE_INFO<<]
+*          4.1 Device Creation Info ................................ [>>DEVICE_INFO<<]
 *       5. Public API Declarations ................................. [>>API<<]
 *       6. RHIO Implementation ..................................... [>>RHIO_IMPL<<]
 *          6.1 API Impl ............................................ [>>API_IMPL<<]
