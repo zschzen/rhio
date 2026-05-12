@@ -69,9 +69,9 @@ ForEachMacros: [RANGES_FOR, FOREACH]
 SortIncludes: CaseSensitive
 IncludeBlocks: Preserve
 IncludeCategories:
-  - Regex:           '^"renda/renda\.h"'
+  - Regex:           '^"rhio\.h"'
     Priority:        0
-  - Regex:           '^"(renda\/)'
+  - Regex:           '^"(rhio\/)'
     Priority:        1
   - Regex:           '^<.*'
     Priority:        3
