@@ -231,20 +231,6 @@
 #define RI_GUARD_NULL_VOID( ptr )    _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return )
 #define RI_GUARD_VOID( cond )        _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return )
 
-// Type aliases
-typedef uint8_t  riU8;
-typedef uint16_t riU16;
-typedef uint32_t riU32;
-typedef uint64_t riU64;
-typedef int8_t   riI8;
-typedef int16_t  riI16;
-typedef int32_t  riI32;
-typedef int64_t  riI64;
-typedef float    riF32;
-typedef double   riF64;
-typedef riU32    riFlags; /* bitfield type used for usage/feature flags */
-typedef riU64    riSize;
-
 #pragma endregion         // Defines and Macros
 
 //----------------------------------------------------------------------------------
@@ -309,6 +295,20 @@ typedef struct RI_DEVICE_STRUCT * riDevice;
 //----------------------------------------------------------------------------------
 
 #pragma region "Types and Structures Definition"
+
+// Type aliases
+typedef uint8_t  riU8;
+typedef uint16_t riU16;
+typedef uint32_t riU32;
+typedef uint64_t riU64;
+typedef int8_t   riI8;
+typedef int16_t  riI16;
+typedef int32_t  riI32;
+typedef int64_t  riI64;
+typedef float    riF32;
+typedef double   riF64;
+typedef riU32    riFlags; /* bitfield type used for usage/feature flags */
+typedef riU64    riSize;
 
 // Boolean
 #if !defined( __cplusplus ) && !defined( bool )
