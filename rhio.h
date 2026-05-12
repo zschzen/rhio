@@ -155,17 +155,15 @@
 
 // Asserting
 #ifndef RHIO_ASSERT
-#    if defined( NDEBUG )
-#        define RHIO_ASSERT( x, ... ) ( (void)0 )
+#    if defined( NDEBUG ) || !defined( RHIO_DEBUG )
+#        define RHIO_ASSERT( x ) ( (void)0 )
 #    else
-#        include <assert.h>
-#        define RHIO_ASSERT( x, ... )                                                                                  \
+#        define RHIO_ASSERT( x )                                                                                       \
             do                                                                                                         \
                 {                                                                                                      \
                     if( RI_UNLIKELY( !( x ) ) )                                                                        \
                         {                                                                                              \
-                            TRACELOG( RI_LOG_FATAL, "ASSERTION FAILED: " __VA_ARGS__ );                                \
-                            assert( x );                                                                               \
+                            TRACELOG( RI_LOG_FATAL, "ASSERTION FAILED: '%s' at %s:%d", #x, __FILE__, __LINE__ );       \
                         }                                                                                              \
                 }                                                                                                      \
             while( 0 )
