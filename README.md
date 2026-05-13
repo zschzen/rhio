@@ -83,7 +83,7 @@ int main() {
     info.backend = RI_BACKEND_OPENGL;
 
     riStatus status = rhioCreateDevice(&info, &device);
-    if (status != RI_SUCCESS) return -1;
+    if (RI_FAILED(status)) return -1;
 
     while (running) {
         rhioBeginFrame(device);

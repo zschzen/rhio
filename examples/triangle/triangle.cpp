@@ -42,7 +42,7 @@ InitExample()
     deviceInfo.backend = RI_BACKEND_OPENGL;
 #endif
 
-    return RI_SUCCESS == rhioCreateDevice( &deviceInfo, &rhioDevice );
+    return RI_SUCCEEDED( rhioCreateDevice( &deviceInfo, &rhioDevice ) );
 }
 
 void

@@ -212,6 +212,11 @@
 // Misc utility macros
 //----------------------------------------------------------------------------------
 
+// Determine if a `riStatus` return value is succeeded or not
+// NOTE: RI_SUCCESS and non-error statuses are non-negative
+#define RI_SUCCEEDED( result ) ( ( result ) >= RI_SUCCESS )
+#define RI_FAILED( result )    ( !RI_SUCCEEDED( result ) )
+
 // Silence compiler for non used
 #ifndef UNUSED
 #    define UNUSED( x ) (void)( x )
@@ -278,15 +283,15 @@ typedef enum
 // Return Status Codes
 typedef enum
 {
-    RI_SUCCESS = 0,           // Operation completed successfully
-    RI_ERROR_INVALID_PARAM,   // A required argument was NULL or out of range
-    RI_ERROR_OUT_OF_MEMORY,   // Heap allocation failed
-    RI_ERROR_BACKEND_INIT,    // The backend failed to initialize
-    RI_ERROR_BACKEND_UNAVAIL, // Requested backend not compiled in / not supported
-    RI_ERROR_SHADER_COMPILE,  // Shader source / SPIR-V could not be compiled/linked
-    RI_ERROR_INVALID_STATE,   // Function called in invalid device state (e.g. no active pass)
-    RI_ERROR_NOT_READY,       // Resource not yet ready (async / swapchain)
-    RI_ERROR_UNKNOWN,         // Catch-all. check logs for details
+    RI_ERROR_UNKNOWN         = -1, // Catch-all. check logs for details
+    RI_ERROR_INVALID_PARAM   = -2, // A required argument was NULL or out of range
+    RI_ERROR_OUT_OF_MEMORY   = -3, // Heap allocation failed
+    RI_ERROR_BACKEND_INIT    = -4, // The backend failed to initialize
+    RI_ERROR_BACKEND_UNAVAIL = -5, // Requested backend not compiled in / not supported
+    RI_ERROR_SHADER_COMPILE  = -6, // Shader source / SPIR-V could not be compiled/linked
+    RI_ERROR_INVALID_STATE   = -7, // Function called in invalid device state (e.g. no active pass)
+    RI_ERROR_NOT_READY       = -8, // Resource not yet ready (async / swapchain)
+    RI_SUCCESS               = 0,  // Operation completed successfully
 
 } riStatus;
 
@@ -594,13 +599,13 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     //----------------------------------------------------------
     // Convert caller config into one normalized descriptor for all backend types
     status = _rhioResolveBackendDesc( info, &desc );
-    if( status != RI_SUCCESS ) goto fail;
+    if( RI_FAILED( status ) ) goto fail;
 
     // Backend Vtable Validation
     //----------------------------------------------------------
     // Catch incomplete custom backends before allocating backend-private state
     status = _rhioValidateDeviceVTable( &desc.vtable );
-    if( status != RI_SUCCESS ) goto fail;
+    if( RI_FAILED( status ) ) goto fail;
 
     // Device Allocation
     //----------------------------------------------------------
@@ -645,7 +650,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // NOTE: shutdown is called on init failure so backends can centralize cleanup.
     backendInitAttempted = true;
     status               = device->vtable.init( device->backendDevice, &info->base );
-    if( status != RI_SUCCESS )
+    if( RI_FAILED( status ) )
         {
             TRACELOG(
                 RI_LOG_ERROR, "DEVICE: Backend initialization failed: %s (%d)", riStatusToString( status ), status );
