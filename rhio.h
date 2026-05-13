@@ -203,17 +203,6 @@
 #    define TRACELOG( l, ... ) riTraceLog( l, __VA_ARGS__ )
 #endif
 
-// API limits
-#ifndef RHIO_MAX_COLOR_ATTACHMENTS
-#    define RHIO_MAX_COLOR_ATTACHMENTS 8
-#endif
-#ifndef RHIO_MAX_VERTEX_ATTRIBUTES
-#    define RHIO_MAX_VERTEX_ATTRIBUTES 16
-#endif
-#ifndef RHIO_MAX_VERTEX_BUFFERS
-#    define RHIO_MAX_VERTEX_BUFFERS 8
-#endif
-
 // Internal helper macro. Determines if a cond isnt true
 #define _RI_GUARD_CORE( cond, log_msg, ... )                                                                           \
     do                                                                                                                 \
@@ -231,7 +220,7 @@
 #define RI_GUARD_NULL_VOID( ptr )    _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return )
 #define RI_GUARD_VOID( cond )        _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return )
 
-#pragma endregion         // Defines and Macros
+#pragma endregion // Defines and Macros
 
 //----------------------------------------------------------------------------------
 // Enumerations                                                          [>>ENUMS<<]
