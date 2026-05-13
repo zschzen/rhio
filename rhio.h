@@ -326,14 +326,11 @@ typedef struct
 #    define RHIO_INIT_INFO_TYPE
 #endif
 
-// Dynamic Interface - Backend function pointers vtable
-// NOTE: Every rendering operation is routed through a slot in this struct, allowing to:
-//   - Swap backends at runtime without touching the public API
-//   - Unit-test rendering code with a mock backend
-//   - Add new backends without modifying existing backend code
+// Dynamic Interface - Device dispatch vtable
+// NOTE: Every rendering operation is routed through a slot in this struct.
 // Backend authors fill this struct and pass it to `rhioCreateDevice()` via riDeviceInfo.
-// Built-in backends (OpenGL, Vulkan) are registered automatically.
-typedef struct riBackendFuncs
+// Built-in backends (OpenGL+ES, Vulkan) are registered automatically.
+typedef struct riDeviceVTable
 {
     // Lifecycle Management
     //------------------------------------------------------------------------------
@@ -342,7 +339,7 @@ typedef struct riBackendFuncs
 
     //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
 
-} riBackendFuncs;
+} riDeviceVTable;
 
 //----------------------------------------------------------------------------------
 // Device creation info                                            [>>DEVICE_INFO<<]
@@ -350,14 +347,14 @@ typedef struct riBackendFuncs
 
 // Device Initialization Information
 // NOTE: Holds configuration for creating a rendering device.
-// If `funcs.init` is set, the built-in backend selection
+// If `vtable.init` is set, the built-in backend selection
 // is bypassed and the custom vtable is used directly;
 // set `backend` to `RI_BACKEND_CUSTOM`.
 typedef struct riDeviceInfo
 {
     riInitInfo     base;              // Basic application info (App name, API version)
     riBackend      backend;           // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
-    riBackendFuncs funcs;             // Dynamic interface hook for custom backend vtable
+    riDeviceVTable vtable;            // Dynamic interface hook for custom backend vtable
     riSize         backendDeviceSize; // Bytes of backend-private state RHIO should allocate for custom backends
 
 } riDeviceInfo;
@@ -438,7 +435,7 @@ typedef struct riBackendDesc
 {
     const char *   name;       // Human-readable backend name for logs
     riBackend      backend;    // Resolved backend token
-    riBackendFuncs vtable;     // Backend dispatch table
+    riDeviceVTable vtable;     // Backend dispatch table
     riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
     riFlags        flags;      // Reserved for backend capabilities/options
 
@@ -455,7 +452,7 @@ typedef struct riBackendDesc
 struct RI_DEVICE_STRUCT
 {
     riBackend      backend;   // Resolved backend token
-    riBackendFuncs funcs;     // Dispatch table used by public API entry points
+    riDeviceVTable vtable;    // Dispatch table used by public API entry points
 
     void * backendDevice;     // Backend-private state passed to every vtable call
 
@@ -475,9 +472,9 @@ static TraceLogCallback rhio_traceLog     = NULL;
 
 static void     _rhioBackendDescInit( riBackendDesc * desc );
 static riStatus _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc );
-static riStatus _rhioValidateBackendFuncs( const riBackendFuncs * funcs );
+static riStatus _rhioValidateDeviceVTable( const riDeviceVTable * vtable );
 
-// OpenGL+ES register backend funcs
+// OpenGL+ES register backend vtable
 //---------------------------------------------------------------------------------
 #    if defined( RHIO_BACKEND_OPENGL )                                                                                 \
         || defined( RHIO_BACKEND_OPENGLES )                                                                            \
@@ -486,7 +483,7 @@ static riStatus _rhioValidateBackendFuncs( const riBackendFuncs * funcs );
 static riStatus _rhioGL_registerBackend( riBackendDesc * desc );
 #    endif
 
-// Vulkan register backend funcs
+// Vulkan register backend vtable
 //---------------------------------------------------------------------------------
 #    if defined( RHIO_BACKEND_VULKAN )
 static riStatus _rhioVK_registerBackend( riBackendDesc * desc );
@@ -576,7 +573,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Backend Vtable Validation
     //----------------------------------------------------------
     // Catch incomplete custom backends before allocating backend-private state
-    status = _rhioValidateBackendFuncs( &desc.vtable );
+    status = _rhioValidateDeviceVTable( &desc.vtable );
     if( status != RI_SUCCESS ) goto fail;
 
     // Device Allocation
@@ -592,7 +589,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Device State Initialization
     //----------------------------------------------------------
     device->backend     = desc.backend;
-    device->funcs       = desc.vtable;
+    device->vtable      = desc.vtable;
     device->backendName = desc.name;
 
     // Backend Context Allocation
@@ -621,7 +618,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Backend receives its private state plus the public application init info
     // NOTE: shutdown is called on init failure so backends can centralize cleanup.
     backendInitAttempted = true;
-    status               = device->funcs.init( device->backendDevice, &info->base );
+    status               = device->vtable.init( device->backendDevice, &info->base );
     if( status != RI_SUCCESS )
         {
             TRACELOG(
@@ -644,9 +641,9 @@ fail:
     //----------------------------------------------------------
     if( device != NULL )
         {
-            if( backendInitAttempted && device->funcs.shutdown != NULL )
+            if( backendInitAttempted && device->vtable.shutdown != NULL )
                 {
-                    device->funcs.shutdown( device->backendDevice );
+                    device->vtable.shutdown( device->backendDevice );
                 }
 
             if( device->backendDevice != NULL )
@@ -669,9 +666,9 @@ rhioDestroyDevice( riDevice device )
     // Backend Shutdown
     //----------------------------------------------------------
     // NOTE: shutdown receives the same private state pointer passed to init().
-    if( device->funcs.shutdown != NULL )
+    if( device->vtable.shutdown != NULL )
         {
-            device->funcs.shutdown( device->backendDevice );
+            device->vtable.shutdown( device->backendDevice );
         }
 
     // Device Memory Cleanup
@@ -833,11 +830,11 @@ _rhioGL_shutdown( void * backendDevice )
 }
 
 //----------------------------------------------------------------------------------
-// OpenGL Backend Function Table
+// OpenGL Backend Vtable
 //----------------------------------------------------------------------------------
 #        define BIND_FUNC( name ) .name = _rhioGL_##name
 
-static const riBackendFuncs s_gl_vtable = {
+static const riDeviceVTable s_gl_vtable = {
     BIND_FUNC( init ),
     BIND_FUNC( shutdown ),
 };
@@ -888,11 +885,11 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 #    if defined( RHIO_BACKEND_VULKAN )
 
 //----------------------------------------------------------------------------------
-// Vulkan Backend Function Table
+// Vulkan Backend Vtable
 //----------------------------------------------------------------------------------
 #        define BIND_FUNC( name ) .name = _rhioVK_##name
 
-static const riBackendFuncs s_vk_vtable = RI_ZERO_INIT;
+static const riDeviceVTable s_vk_vtable = RI_ZERO_INIT;
 
 #        undef BIND_FUNC
 
@@ -937,17 +934,17 @@ _rhioBackendDescInit( riBackendDesc * desc )
 
 // Ensure backend exposes callbacks required by the device API
 static riStatus
-_rhioValidateBackendFuncs( const riBackendFuncs * funcs )
+_rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 {
-    RI_GUARD_NULL( funcs, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( vtable, RI_ERROR_INVALID_PARAM );
 
     // Required backend callbacks
     //----------------------------------------------------------
     // NOTE: Public API calls dispatch through these slots after device creation.
-#    define CHECK_BACKEND_FUNC( name )                                                                                 \
+#    define CHECK_VTABLE_SLOT( name )                                                                                  \
         do                                                                                                             \
             {                                                                                                          \
-                if( RI_UNLIKELY( funcs->name == NULL ) )                                                               \
+                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
                     {                                                                                                  \
                         TRACELOG( RI_LOG_ERROR, "BACKEND: Missing required vtable slot '%s'", #name );                 \
                         return RI_ERROR_INVALID_PARAM;                                                                 \
@@ -955,10 +952,10 @@ _rhioValidateBackendFuncs( const riBackendFuncs * funcs )
             }                                                                                                          \
         while( 0 )
 
-    CHECK_BACKEND_FUNC( init );
-    CHECK_BACKEND_FUNC( shutdown );
+    CHECK_VTABLE_SLOT( init );
+    CHECK_VTABLE_SLOT( shutdown );
 
-#    undef CHECK_BACKEND_FUNC
+#    undef CHECK_VTABLE_SLOT
 
     // TODO: Validate required resource dispatch slots here when buffers,
     // textures, samplers, shaders, render passes, and command lists are added.
@@ -978,12 +975,12 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
     // Custom backend
     //----------------------------------------------------------
     // NOTE: A custom vtable takes precedence over info->backend. Missing required
-    // slots are reported by `_rhioValidateBackendFuncs()`.
-    if( info->funcs.init != NULL )
+    // slots are reported by `_rhioValidateDeviceVTable()`.
+    if( info->vtable.init != NULL )
         {
             desc->name       = "Custom";
             desc->backend    = RI_BACKEND_CUSTOM;
-            desc->vtable     = info->funcs;
+            desc->vtable     = info->vtable;
             desc->deviceSize = info->backendDeviceSize;
             return RI_SUCCESS;
         }
