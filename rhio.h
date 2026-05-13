@@ -37,15 +37,27 @@
 *
 *   CONFIGURATION:
 *       #define RHIO_IMPLEMENTATION
-*           Define this macro to compile the library’s implementation in the current file.
-*           If left undefined, the library works header‑only and can be safely included anywhere.
-*           Make sure only a single source file defines it.
+*           Generates the implementation. Required in exactly one source file.
 *
 *       #define RHIO_LOG_SUPPORT
-*           Enables rhio logging system.
+*           Enables internal logging system (stdout/stderr).
+*
+*       #define RHIO_DEBUG
+*           Enables debug-only features (e.g. assertions).
+*
+*       #define RHIO_BACKEND_OPENGL       // OpenGL 3.3+
+*       #define RHIO_BACKEND_OPENGLES     // OpenGLES 2.0 / 3.0
+*       #define RHIO_BACKEND_VULKAN       // Vulkan 1.4+
+*           Enables the desired rendering backends.
+*
+*       #define RI_MALLOC(sz)             // Custom allocation (default: malloc)
+*       #define RI_CALLOC(n,sz)           // Custom allocation (default: calloc)
+*       #define RI_REALLOC(pt,sz)         // Custom allocation (default: realloc)
+*       #define RI_FREE(pt)               // Custom deallocation (default: free)
 *
 *   DEPENDENCIES:
-*       - ...
+*       - C99 standard library only (<stdarg.h>, <stdint.h>, <stdlib.h>, <stdio.h>).
+*       - TODO: Add platform-specific headers are pulled in conditionally inside the implementation.
 *
 *
 *   LICENSE: zlib/libpng
