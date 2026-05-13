@@ -102,6 +102,18 @@
 
 #pragma region "Defines and Macros"
 
+// Stringification helpers
+#define _RHIO_STR( x )     #x
+#define RHIO_STR( x )      _RHIO_STR( x )
+
+// Version
+#define RHIO_VERSION_MAJOR 0
+#define RHIO_VERSION_MINOR 0
+#define RHIO_VERSION_PATCH 2
+#define RHIO_VERSION       ( ( RHIO_VERSION_MAJOR << 16 ) | ( RHIO_VERSION_MINOR << 8 ) | RHIO_VERSION_PATCH )
+#define RHIO_VERSION_STRING                                                                                            \
+    RHIO_STR( RHIO_VERSION_MAJOR ) "." RHIO_STR( RHIO_VERSION_MINOR ) "." RHIO_STR( RHIO_VERSION_PATCH )
+
 // Shared library
 #ifndef RI_EXPORT
 #    if defined( rhio_EXPORTS ) && defined( _WIN32 )
@@ -566,6 +578,8 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     riBackendDesc             desc                 = RI_ZERO_INIT;
     struct RI_DEVICE_STRUCT * device               = NULL;
     bool                      backendInitAttempted = false;
+
+    TRACELOG( RI_LOG_INFO, "Initializing rhio %s", RHIO_VERSION_STRING );
 
     // Output Handle Initialization
     //----------------------------------------------------------
