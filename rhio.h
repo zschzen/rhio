@@ -217,6 +217,12 @@
 #define RI_SUCCEEDED( result ) ( ( result ) >= RI_SUCCESS )
 #define RI_FAILED( result )    ( !RI_SUCCEEDED( result ) )
 
+// Flags operations
+#define RI_FLAG_SET( n, f )    ( ( n ) |= ( f ) )
+#define RI_FLAG_CLEAR( n, f )  ( ( n ) &= ~( f ) )
+#define RI_FLAG_TOGGLE( n, f ) ( ( n ) ^= ( f ) )
+#define RI_FLAG_CHECK( n, f )  ( ( n ) & ( f ) )
+
 // Silence compiler for non used
 #ifndef UNUSED
 #    define UNUSED( x ) (void)( x )
@@ -279,6 +285,14 @@ typedef enum
     RI_BACKEND_CUSTOM   = 3, // Caller supplies the full vtable
 
 } riBackend;
+
+// Device creation flags
+typedef enum
+{
+    RI_DEVICE_FLAG_NONE  = 0,
+    RI_DEVICE_FLAG_DEBUG = 1u << 0, // Request backend debug features (validation layers, debug callbacks, ...)
+
+} riDeviceFlag;
 
 // Return Status Codes
 typedef enum
@@ -355,6 +369,17 @@ typedef struct
 #    define RHIO_INIT_INFO_TYPE
 #endif
 
+#if !defined( RHIO_BACKEND_INIT_INFO_TYPE )
+// Backend initialization information
+typedef struct
+{
+    riInitInfo base;  // Basic application info
+    riFlags    flags; // riDeviceFlag bits requested for this device
+
+} riBackendInitInfo;
+#    define RHIO_BACKEND_INIT_INFO_TYPE
+#endif
+
 // Dynamic Interface - Device dispatch vtable
 // NOTE: Every rendering operation is routed through a slot in this struct.
 // Backend authors fill this struct and pass it to `rhioCreateDevice()` via riDeviceInfo.
@@ -363,8 +388,8 @@ typedef struct riDeviceVTable
 {
     // Lifecycle Management
     //------------------------------------------------------------------------------
-    riStatus ( *init )( void * backendDevice, const riInitInfo * info ); // Initialize the backend graphics context
-    void     ( *shutdown )( void * backendDevice );                      // Tear down backend resources and free memory
+    riStatus ( *init )( void * backendDevice, const riBackendInitInfo * info ); // Initialize backend graphics context
+    void     ( *shutdown )( void * backendDevice ); // Tear down backend resources and free memory
 
     //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
 
@@ -383,6 +408,7 @@ typedef struct riDeviceInfo
 {
     riInitInfo     base;              // Basic application info (App name, API version)
     riBackend      backend;           // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
+    riFlags        flags;             // riDeviceFlag bits requested for this device
     riDeviceVTable vtable;            // Dynamic interface hook for custom backend vtable
     riSize         backendDeviceSize; // Bytes of backend-private state RHIO should allocate for custom backends
 
@@ -466,7 +492,7 @@ typedef struct riBackendDesc
     riBackend      backend;    // Resolved backend token
     riDeviceVTable vtable;     // Backend dispatch table
     riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
-    riFlags        flags;      // Reserved for backend capabilities/options
+    riFlags        flags;      // riDeviceFlag bits requested for backend initialization
 
 } riBackendDesc;
 
@@ -481,6 +507,7 @@ typedef struct riBackendDesc
 struct RI_DEVICE_STRUCT
 {
     riBackend      backend;   // Resolved backend token
+    riFlags        flags;     // riDeviceFlag bits enabled at creation
     riDeviceVTable vtable;    // Dispatch table used by public API entry points
 
     void * backendDevice;     // Backend-private state passed to every vtable call
@@ -581,6 +608,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 {
     riStatus                  status               = RI_ERROR_UNKNOWN;
     riBackendDesc             desc                 = RI_ZERO_INIT;
+    riBackendInitInfo         backendInitInfo      = RI_ZERO_INIT;
     struct RI_DEVICE_STRUCT * device               = NULL;
     bool                      backendInitAttempted = false;
 
@@ -601,6 +629,12 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     status = _rhioResolveBackendDesc( info, &desc );
     if( RI_FAILED( status ) ) goto fail;
 
+    // Display current device info
+    TRACELOG( RI_LOG_INFO, "DEVICE: Creating device" );
+    TRACELOG( RI_LOG_INFO, "    > app: %s", STR_NONEMPTY( info->base.appName ) ? info->base.appName : "unnamed app" );
+    TRACELOG( RI_LOG_INFO, "    > backend: %s", STR_NONEMPTY( desc.name ) ? desc.name : "unknown" );
+    TRACELOG( RI_LOG_INFO, "    > flags: 0x%08x", (unsigned int)desc.flags );
+
     // Backend Vtable Validation
     //----------------------------------------------------------
     // Catch incomplete custom backends before allocating backend-private state
@@ -620,6 +654,7 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     // Device State Initialization
     //----------------------------------------------------------
     device->backend     = desc.backend;
+    device->flags       = desc.flags;
     device->vtable      = desc.vtable;
     device->backendName = desc.name;
 
@@ -646,10 +681,12 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 
     // Backend Initialization
     //----------------------------------------------------------
-    // Backend receives its private state plus the public application init info
+    // Backend receives its private state plus normalized initialization info.
     // NOTE: shutdown is called on init failure so backends can centralize cleanup.
-    backendInitAttempted = true;
-    status               = device->vtable.init( device->backendDevice, &info->base );
+    backendInitInfo.base  = info->base;
+    backendInitInfo.flags = desc.flags;
+    backendInitAttempted  = true;
+    status                = device->vtable.init( device->backendDevice, &backendInitInfo );
     if( RI_FAILED( status ) )
         {
             TRACELOG(
@@ -837,7 +874,7 @@ typedef struct riGL_Device
 
 // Initialize OpenGL state and allocate default resources
 static riStatus
-_rhioGL_init( void * backendDevice, const riInitInfo * info )
+_rhioGL_init( void * backendDevice, const riBackendInitInfo * info )
 {
     UNUSED( backendDevice );
     UNUSED( info );
@@ -877,8 +914,11 @@ static riStatus
 _rhioGL_registerBackend( riBackendDesc * desc )
 {
     riBackend backend = RI_BACKEND_OPENGL;
+    riFlags   flags   = 0;
 
     RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+
+    flags = desc->flags;
 
     // Preserve requested GL flavor before clearing the descriptor
     if( desc->backend == RI_BACKEND_OPENGLES )
@@ -894,7 +934,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     desc->backend    = backend;
     desc->deviceSize = (riSize)sizeof( riGL_Device );
     desc->vtable     = s_gl_vtable;
-    desc->flags      = 0;
+    desc->flags      = flags;
 
     return RI_SUCCESS;
 }
@@ -928,7 +968,11 @@ static const riDeviceVTable s_vk_vtable = RI_ZERO_INIT;
 static riStatus
 _rhioVK_registerBackend( riBackendDesc * desc )
 {
+    riFlags flags = 0;
+
     RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+
+    flags = desc->flags;
 
     _rhioBackendDescInit( desc );
 
@@ -937,7 +981,7 @@ _rhioVK_registerBackend( riBackendDesc * desc )
     desc->name    = "Vulkan";
     desc->backend = RI_BACKEND_VULKAN;
     desc->vtable  = s_vk_vtable;
-    desc->flags   = 0;
+    desc->flags   = flags;
 
     TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan backend registration is not implemented yet" );
 
@@ -998,10 +1042,18 @@ _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 static riStatus
 _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
 {
+    const riFlags validFlags = (riFlags)RI_DEVICE_FLAG_DEBUG;
+
     RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
     RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
 
     _rhioBackendDescInit( desc );
+
+    if( RI_UNLIKELY( RI_FLAG_CHECK( info->flags, ~validFlags ) != 0 ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Invalid device flags: 0x%08x", (unsigned int)info->flags );
+            return RI_ERROR_INVALID_PARAM;
+        }
 
     // Custom backend
     //----------------------------------------------------------
@@ -1013,12 +1065,15 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
             desc->backend    = RI_BACKEND_CUSTOM;
             desc->vtable     = info->vtable;
             desc->deviceSize = info->backendDeviceSize;
+            desc->flags      = info->flags;
             return RI_SUCCESS;
         }
 
     // Built-in backend
     //----------------------------------------------------------
     // NOTE: Only backends compiled into this translation unit can register here.
+    desc->flags = info->flags;
+
     switch( info->backend )
         {
 #    if defined( RHIO_BACKEND_OPENGL )                                                                                 \

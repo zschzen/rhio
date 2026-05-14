@@ -32,6 +32,7 @@ InitExample()
     // Backend is selected by the example build flags.
     riDeviceInfo deviceInfo = {};
     deviceInfo.base.appName = exampleInfo.appName;
+    RI_FLAG_SET( deviceInfo.flags, RI_DEVICE_FLAG_DEBUG );
 
 // Determine backend
 #if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
