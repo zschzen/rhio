@@ -82,7 +82,8 @@ InitWindow( const WindowInfo & info )
         {
             int xpos, ypos, width, height;
             glfwGetMonitorWorkarea( primary, &xpos, &ypos, &width, &height );
-            glfwSetWindowPos( windowState.handle, xpos + ( width - info.screenWidth ) / 2,
+            glfwSetWindowPos( windowState.handle,
+                              xpos + ( width - info.screenWidth ) / 2,
                               ypos + ( height - info.screenHeight ) / 2 );
         }
 
