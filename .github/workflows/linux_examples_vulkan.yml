@@ -1,0 +1,195 @@
+# ============================================================================
+# rhio - Linux Vulkan Examples
+# ============================================================================
+# Builds the Vulkan example targets on Linux.
+#
+# The workflow installs the official LunarG SDK because rhio's requires
+# Vulkan 1.4+, and distribution Vulkan packages can lag behind that.
+# ============================================================================
+
+name: Build rhio Vulkan examples - Linux
+
+# --------------------------------------------------------------------
+# Triggers
+# --------------------------------------------------------------------
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "examples/**"
+      - ".github/workflows/linux_examples_vulkan.yml"
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "examples/**"
+      - ".github/workflows/linux_examples_vulkan.yml"
+
+# --------------------------------------------------------------------
+# Permissions
+# --------------------------------------------------------------------
+permissions:
+  contents: read
+
+# --------------------------------------------------------------------
+# Shared Environment
+# --------------------------------------------------------------------
+env:
+  # Keep CPM downloads outside build directories and make them cacheable
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+
+  # LunarG SDK install/cache location. The extracted layout is:
+  #   .vulkan-sdk/<version>/x86_64
+  VULKAN_SDK_ROOT: ${{ github.workspace }}/.vulkan-sdk
+  VULKAN_SDK_VERSION: "1.4.350.0"
+
+# --------------------------------------------------------------------
+# Jobs
+# --------------------------------------------------------------------
+jobs:
+  # ------------------------------------------------------------------
+  # Vulkan Example Build
+  # ------------------------------------------------------------------
+  build:
+    name: GCC
+    runs-on: ubuntu-latest
+
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      # --------------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------------
+      # Linux Dependencies
+      # --------------------------------------------------------------
+      # Vulkan headers/loader come from LunarG below. These packages cover the
+      # C++ build toolchain and GLFW's X11/Wayland Linux backends
+      - name: Setup Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+
+          packages=(
+            # SDK download and checksum verification
+            ca-certificates
+            curl
+
+            # C++ example build toolchain
+            g++
+
+            # CMake/pkg-config discovery helpers
+            pkg-config
+
+            # Prefer system GLFW when a new enough package is available
+            libglfw3-dev
+
+            # GLFW X11 backend dependencies
+            libx11-dev
+            libxcursor-dev
+            libxrandr-dev
+            libxinerama-dev
+            libxi-dev
+            libxext-dev
+            libxfixes-dev
+
+            # GLFW Wayland backend dependencies
+            libwayland-dev
+            libxkbcommon-dev
+            wayland-protocols
+            extra-cmake-modules
+          )
+
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+
+      # --------------------------------------------------------------
+      # Vulkan SDK Cache
+      # --------------------------------------------------------------
+      # The SDK is large enough to cache separately from CPM packages
+      - name: Cache Vulkan SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VULKAN_SDK_ROOT }}
+          key: ${{ runner.os }}-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}
+
+      # --------------------------------------------------------------
+      # Vulkan SDK
+      # --------------------------------------------------------------
+      # Download the official SDK tarball, verify the published SHA256, then
+      # expose the SDK to CMake through `VULKAN_SDK` and `CMAKE_PREFIX_PATH`
+      - name: Install Vulkan SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdk_dir="${VULKAN_SDK_ROOT}/${VULKAN_SDK_VERSION}/x86_64"
+
+          if [ ! -d "${sdk_dir}" ]; then
+            mkdir -p "${VULKAN_SDK_ROOT}"
+            cd "${VULKAN_SDK_ROOT}"
+
+            curl -fsSLo vulkan_sdk.tar.xz "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkan_sdk.tar.xz"
+            curl -fsSL "https://sdk.lunarg.com/sdk/sha/${VULKAN_SDK_VERSION}/linux/vulkan_sdk.tar.xz.txt" \
+              | sed "s/  .*/  vulkan_sdk.tar.xz/" > vulkan_sdk.tar.xz.sha256
+
+            sha256sum -c vulkan_sdk.tar.xz.sha256
+            tar -xf vulkan_sdk.tar.xz
+            rm -f vulkan_sdk.tar.xz vulkan_sdk.tar.xz.sha256
+          fi
+
+          {
+            echo "VULKAN_SDK=${sdk_dir}"
+            echo "CMAKE_PREFIX_PATH=${sdk_dir}:${CMAKE_PREFIX_PATH:-}"
+            echo "LD_LIBRARY_PATH=${sdk_dir}/lib:${LD_LIBRARY_PATH:-}"
+          } >> "${GITHUB_ENV}"
+
+          echo "${sdk_dir}/bin" >> "${GITHUB_PATH}"
+
+      # --------------------------------------------------------------
+      # Dependency Cache
+      # --------------------------------------------------------------
+      - name: Cache CPM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-vulkan-examples-cpm-${{ hashFiles('package-lock.cmake', '**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vulkan-examples-cpm-
+            ${{ runner.os }}-cpm-
+
+      # --------------------------------------------------------------
+      # Configure
+      # --------------------------------------------------------------
+      - name: Configure Vulkan examples
+        shell: bash
+        run: |
+          cmake -S . -B build/examples-linux-vulkan \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCPM_SOURCE_CACHE="${CPM_SOURCE_CACHE}" \
+            -DRHIO_BUILD_TESTS=OFF \
+            -DRHIO_BUILD_EXAMPLES=ON \
+            -DRHIO_BACKEND_OPENGL=OFF \
+            -DRHIO_BACKEND_VULKAN=ON \
+            -DRHIO_EXAMPLE_GRAPHICS_API=Vulkan \
+            -DUSE_CCACHE=OFF
+
+      # --------------------------------------------------------------
+      # Build
+      # --------------------------------------------------------------
+      - name: Build Vulkan examples
+        run: cmake --build build/examples-linux-vulkan --parallel

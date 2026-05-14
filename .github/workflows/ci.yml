@@ -1,0 +1,137 @@
+# ============================================================================
+# rhio - Core CI
+# ============================================================================
+# Validates the header-only library itself:
+#   - C99 implementation/unit build
+#   - C++ include smoke test
+#   - GCC and Clang coverage on Linux
+#   - CTest execution
+#   - install/export smoke check
+#
+# Graphics backends are disabled here on purpose.
+# ============================================================================
+
+name: CI
+
+# --------------------------------------------------------------------
+# Triggers
+# --------------------------------------------------------------------
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
+
+# --------------------------------------------------------------------
+# Permissions
+# --------------------------------------------------------------------
+permissions:
+  contents: read
+
+# --------------------------------------------------------------------
+# Shared Environment
+# --------------------------------------------------------------------
+env:
+  # Print failing test output directly in the Actions log
+  CTEST_OUTPUT_ON_FAILURE: 1
+
+  # Keep CPM downloads outside build directories and make them cacheable
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+
+# --------------------------------------------------------------------
+# Jobs
+# --------------------------------------------------------------------
+jobs:
+  # --------------------------------------------------------------------
+  # Core Test Matrix
+  # --------------------------------------------------------------------
+  test:
+    name: ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+
+    # Test both major compiler families available on GitHub Linux runners
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      # --------------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------------
+      # Dependency Cache
+      # --------------------------------------------------------------
+      - name: Cache CPM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-${{ matrix.compiler }}-cpm-${{ hashFiles('package-lock.cmake', '**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.compiler }}-cpm-
+            ${{ runner.os }}-cpm-
+
+      # --------------------------------------------------------------
+      # Configure
+      # --------------------------------------------------------------
+      - name: Configure core library
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCPM_SOURCE_CACHE="${CPM_SOURCE_CACHE}" \
+            -DRHIO_BUILD_TESTS=ON \
+            -DRHIO_BUILD_EXAMPLES=OFF \
+            -DRHIO_BACKEND_OPENGL=OFF \
+            -DRHIO_BACKEND_VULKAN=OFF \
+            -DUSE_CCACHE=OFF
+
+      # --------------------------------------------------------------
+      # Build
+      # --------------------------------------------------------------
+      - name: Build core tests
+        run: cmake --build build --parallel
+
+      # --------------------------------------------------------------
+      # Test
+      # --------------------------------------------------------------
+      - name: Run unit tests
+        run: ctest --test-dir build --build-config Debug --output-on-failure
+
+      # --------------------------------------------------------------
+      # Install Smoke Test
+      # --------------------------------------------------------------
+      # Header-only projects still need packaging/export checks because users
+      # consume them through install trees and CMake package config files
+      - name: Install package
+        run: cmake --install build --prefix "${RUNNER_TEMP}/rhio-install"

@@ -1,0 +1,138 @@
+# ============================================================================
+# rhio - Linux OpenGL Examples
+# ============================================================================
+# Builds the desktop OpenGL example targets on Linux.
+# ============================================================================
+
+name: Build rhio OpenGL examples - Linux
+
+# --------------------------------------------------------------------
+# Triggers
+# --------------------------------------------------------------------
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "examples/**"
+      - ".github/workflows/linux_examples_opengl.yml"
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - "rhio.h"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "package-lock.cmake"
+      - "cmake/**"
+      - "examples/**"
+      - ".github/workflows/linux_examples_opengl.yml"
+
+# --------------------------------------------------------------------
+# Permissions
+# --------------------------------------------------------------------
+permissions:
+  contents: read
+
+# --------------------------------------------------------------------
+# Shared Environment
+# --------------------------------------------------------------------
+env:
+  # Keep CPM downloads outside build directories and make them cacheable
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+
+# --------------------------------------------------------------------
+# Jobs
+# --------------------------------------------------------------------
+jobs:
+  # --------------------------------------------------------------------
+  # OpenGL Example Build
+  # --------------------------------------------------------------------
+  build:
+    name: GCC
+    runs-on: ubuntu-latest
+
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      # --------------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------------
+      # Dependencies
+      # --------------------------------------------------------------
+      - name: Setup Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+
+          packages=(
+            # C++ example build toolchain
+            g++
+
+            # CMake/pkg-config discovery helpers
+            pkg-config
+
+            # Desktop OpenGL development headers/libraries
+            libgl1-mesa-dev
+
+            # GLFW X11 backend dependencies
+            libx11-dev
+            libxcursor-dev
+            libxrandr-dev
+            libxinerama-dev
+            libxi-dev
+            libxext-dev
+            libxfixes-dev
+
+            # GLFW Wayland backend dependencies
+            libwayland-dev
+            libxkbcommon-dev
+            wayland-protocols
+            extra-cmake-modules
+          )
+
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+
+      # --------------------------------------------------------------
+      # Dependency Cache
+      # --------------------------------------------------------------
+      - name: Cache CPM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-examples-cpm-${{ hashFiles('package-lock.cmake', '**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-examples-cpm-
+            ${{ runner.os }}-cpm-
+
+      # --------------------------------------------------------------
+      # Configure
+      # --------------------------------------------------------------
+      - name: Configure OpenGL examples
+        shell: bash
+        run: |
+          cmake -S . -B build/examples-linux \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCPM_SOURCE_CACHE="${CPM_SOURCE_CACHE}" \
+            -DRHIO_BUILD_TESTS=OFF \
+            -DRHIO_BUILD_EXAMPLES=ON \
+            -DRHIO_BACKEND_OPENGL=ON \
+            -DRHIO_BACKEND_VULKAN=OFF \
+            -DRHIO_EXAMPLE_GRAPHICS_API=OpenGL \
+            -DUSE_CCACHE=OFF
+
+      # --------------------------------------------------------------
+      # Build
+      # --------------------------------------------------------------
+      - name: Build OpenGL examples
+        run: cmake --build build/examples-linux --parallel
