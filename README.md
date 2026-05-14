@@ -8,6 +8,10 @@
 [![License: zlib](https://img.shields.io/badge/License-zlib-blue.svg)](https://opensource.org/licenses/Zlib)
 [![C99](https://img.shields.io/badge/Standard-C99-orange.svg)](https://en.wikipedia.org/wiki/C99)
 [![Platform](https://img.shields.io/badge/Platform-Desktop%20%7C%20Web-brightgreen.svg)]()
+<br>
+[![CI](https://github.com/zschzen/rhio/actions/workflows/ci.yml/badge.svg)](https://github.com/zschzen/rhio/actions/workflows/ci.yml)
+[![Linux OpenGL](https://github.com/zschzen/rhio/actions/workflows/linux_examples_opengl.yml/badge.svg)](https://github.com/zschzen/rhio/actions/workflows/linux_examples_opengl.yml)
+[![Linux Vulkan](https://github.com/zschzen/rhio/actions/workflows/linux_examples_vulkan.yml/badge.svg)](https://github.com/zschzen/rhio/actions/workflows/linux_examples_vulkan.yml)
 
 A minimal, high-performance Rendering Hardware Interface (RHI) for a simpler world. 🍃
 
