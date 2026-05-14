@@ -15,6 +15,7 @@ enum_option(OPENGL_VERSION "Auto;3.3;ES 2.0;ES 3.0" "Select the OpenGL/OpenGL ES
 # --------------------------------------------------------------------
 option(BUILD_SHARED_LIBS "Build shared libraries for dependencies that honor BUILD_SHARED_LIBS" OFF)
 option(RHIO_BUILD_EXAMPLES "Build rhio examples" ${RHIO_IS_MAIN})
+option(RHIO_BUILD_TESTS "Build rhio unit tests" ${RHIO_IS_MAIN})
 
 # Ccache
 option(USE_CCACHE "Enable compiler cache that can drastically improve build times" ${RHIO_IS_MAIN})

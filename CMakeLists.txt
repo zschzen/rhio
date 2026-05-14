@@ -165,6 +165,11 @@ install(
 # --------------------------------------------------------------------
 # Subdirectories
 # --------------------------------------------------------------------
+if(RHIO_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests/unit)
+endif()
+
 if(RHIO_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

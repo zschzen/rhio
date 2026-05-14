@@ -42,6 +42,18 @@ CPMDeclarePackage(GroupSourcesByFolder.cmake
   EXCLUDE_FROM_ALL YES
 )
 
+# rktest
+CPMDeclarePackage(rktest
+  NAME rktest
+  GIT_TAG 6d8f9354bfff2bfd0944ffd29264ed6058dcaa5b
+  GITHUB_REPOSITORY Warwolt/rktest
+  SYSTEM YES
+  EXCLUDE_FROM_ALL YES
+  OPTIONS
+    "rktest_build_tests OFF"
+    "rktest_build_samples OFF"
+)
+
 # GLFW
 CPMDeclarePackage(GLFW
   NAME GLFW
