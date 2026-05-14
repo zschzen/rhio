@@ -7,7 +7,7 @@
 # Vulkan 1.4+, and distribution Vulkan packages can lag behind that.
 # ============================================================================
 
-name: Build rhio Vulkan examples - Linux
+name: Vulkan Linux
 
 # --------------------------------------------------------------------
 # Triggers

@@ -4,7 +4,7 @@
 # Builds the desktop OpenGL example targets on Linux.
 # ============================================================================
 
-name: Build rhio OpenGL examples - Linux
+name: OpenGL Linux
 
 # --------------------------------------------------------------------
 # Triggers
