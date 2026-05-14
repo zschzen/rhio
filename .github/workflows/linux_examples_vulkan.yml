@@ -3,7 +3,7 @@
 # ============================================================================
 # Builds the Vulkan example targets on Linux.
 #
-# The workflow installs the official LunarG SDK because rhio's requires
+# The workflow installs the official LunarG SDK because rhio requires
 # Vulkan 1.4+, and distribution Vulkan packages can lag behind that.
 # ============================================================================
 
@@ -78,8 +78,8 @@ jobs:
       # --------------------------------------------------------------
       # Linux Dependencies
       # --------------------------------------------------------------
-      # Vulkan headers/loader come from LunarG below. These packages cover the
-      # C++ build toolchain and GLFW's X11/Wayland Linux backends
+      # Vulkan headers come from LunarG below. The loader library comes from
+      # Ubuntu's libvulkan-dev package and is passed to CMake explicitly.
       - name: Setup Linux dependencies
         shell: bash
         run: |
@@ -98,6 +98,9 @@ jobs:
 
             # Prefer system GLFW when a new enough package is available
             libglfw3-dev
+
+            # Vulkan loader development library
+            libvulkan-dev
 
             # GLFW X11 backend dependencies
             libx11-dev
@@ -130,8 +133,8 @@ jobs:
       # --------------------------------------------------------------
       # Vulkan SDK
       # --------------------------------------------------------------
-      # Download the official SDK tarball, verify the published SHA256, then
-      # expose the SDK to CMake through `VULKAN_SDK` and `CMAKE_PREFIX_PATH`
+      # Download the official SDK tarball, verify the published SHA256, find the
+      # system Vulkan loader, then expose all discovery paths to CMake
       - name: Install Vulkan SDK
         shell: bash
         run: |
@@ -152,8 +155,27 @@ jobs:
             rm -f vulkan_sdk.tar.xz vulkan_sdk.tar.xz.sha256
           fi
 
+          vulkan_library=""
+
+          if vulkan_libdir="$(pkg-config --variable=libdir vulkan 2>/dev/null)"; then
+            vulkan_library="${vulkan_libdir}/libvulkan.so"
+          fi
+
+          if [ -z "${vulkan_library}" ] || [ ! -f "${vulkan_library}" ]; then
+            vulkan_library="/usr/lib/x86_64-linux-gnu/libvulkan.so"
+          fi
+
+          if [ ! -f "${vulkan_library}" ]; then
+            echo "::error::Vulkan loader library not found"
+            exit 1
+          fi
+
+          echo "Using Vulkan SDK: ${sdk_dir}"
+          echo "Using Vulkan loader: ${vulkan_library}"
+
           {
             echo "VULKAN_SDK=${sdk_dir}"
+            echo "VULKAN_LIBRARY=${vulkan_library}"
             echo "CMAKE_PREFIX_PATH=${sdk_dir}:${CMAKE_PREFIX_PATH:-}"
             echo "LD_LIBRARY_PATH=${sdk_dir}/lib:${LD_LIBRARY_PATH:-}"
           } >> "${GITHUB_ENV}"
@@ -186,6 +208,8 @@ jobs:
             -DRHIO_BACKEND_OPENGL=OFF \
             -DRHIO_BACKEND_VULKAN=ON \
             -DRHIO_EXAMPLE_GRAPHICS_API=Vulkan \
+            -DVulkan_INCLUDE_DIR="${VULKAN_SDK}/include" \
+            -DVulkan_LIBRARY="${VULKAN_LIBRARY}" \
             -DUSE_CCACHE=OFF
 
       # --------------------------------------------------------------
