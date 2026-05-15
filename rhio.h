@@ -177,6 +177,18 @@
 #    define RI_ZERO_INIT    { 0 }
 #endif
 
+// Compile-time assertion
+#ifndef RHIO_STATIC_ASSERT
+#    if defined( __cplusplus ) && ( ( __cplusplus >= 201103L ) || ( defined( _MSC_VER ) && _MSC_VER >= 1600 ) )
+#        define RHIO_STATIC_ASSERT( expr, msg ) static_assert( ( expr ), msg )
+#    elif !defined( __cplusplus ) && defined( __STDC_VERSION__ ) && ( __STDC_VERSION__ >= 201112L )
+#        define RHIO_STATIC_ASSERT( expr, msg ) _Static_assert( ( expr ), msg )
+#    else
+#        define RHIO_STATIC_ASSERT( expr, msg )                                                                        \
+            extern void rhio_static_assertion_failed( char ( * )[( expr ) ? 1 : -1] )
+#    endif
+#endif
+
 // Asserting
 #ifndef RHIO_ASSERT
 #    if defined( NDEBUG ) || !defined( RHIO_DEBUG )
