@@ -50,10 +50,11 @@
 *       #define RHIO_BACKEND_VULKAN       // Vulkan 1.4+
 *           Enables the desired rendering backends.
 *
-*       #define RI_MALLOC(sz)             // Custom allocation (default: malloc)
-*       #define RI_CALLOC(n,sz)           // Custom allocation (default: calloc)
-*       #define RI_REALLOC(pt,sz)         // Custom allocation (default: realloc)
-*       #define RI_FREE(pt)               // Custom deallocation (default: free)
+*       #define RI_MALLOC(sz)
+*       #define RI_CALLOC(n,sz)
+*       #define RI_REALLOC(pt,sz)
+*       #define RI_FREE(pt)
+*           Optional allocator overrides. Defaults to <stdlib.h>
 *
 *   DEPENDENCIES:
 *       - C99 standard library only (<stdarg.h>, <stdint.h>, <stdlib.h>, <stdio.h>).
