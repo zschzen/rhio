@@ -307,20 +307,77 @@ typedef enum
 
 } riDeviceFlag;
 
-// Return Status Codes
+// Return status codes for all public API functions
 typedef enum
 {
-    RI_ERROR_UNKNOWN         = -1, // Catch-all. check logs for details
-    RI_ERROR_INVALID_PARAM   = -2, // A required argument was NULL or out of range
-    RI_ERROR_OUT_OF_MEMORY   = -3, // Heap allocation failed
+    // Success
+    RI_SUCCESS = 0, // Operation completed successfully
+
+    // Generic Errors
+    RI_ERROR_UNKNOWN       = -1, // Catch-all failure; check logs for details
+    RI_ERROR_INVALID_PARAM = -2, // A required argument was NULL or out of range
+    RI_ERROR_OUT_OF_MEMORY = -3, // Heap allocation failed
+
+    // Backend & Compilation Errors
     RI_ERROR_BACKEND_INIT    = -4, // The backend failed to initialize
-    RI_ERROR_BACKEND_UNAVAIL = -5, // Requested backend not compiled in / not supported
-    RI_ERROR_SHADER_COMPILE  = -6, // Shader source / SPIR-V could not be compiled/linked
-    RI_ERROR_INVALID_STATE   = -7, // Function called in invalid device state (e.g. no active pass)
-    RI_ERROR_NOT_READY       = -8, // Resource not yet ready (async / swapchain)
-    RI_SUCCESS               = 0,  // Operation completed successfully
+    RI_ERROR_BACKEND_UNAVAIL = -5, // Requested backend not compiled in or not supported
+    RI_ERROR_SHADER_COMPILE  = -6, // Shader source or SPIR-V could not be compiled/linked
+
+    // Runtime & State Errors
+    RI_ERROR_INVALID_STATE = -7, // Function called in invalid device state (e.g. no active pass)
+    RI_ERROR_NOT_READY     = -8, // Resource not yet ready (async or swapchain)
+    RI_ERROR_SURFACE_LOST  = -9, // OS/Windowing surface was lost or resized
 
 } riStatus;
+
+// Native window handle types for surface/swapchain creation
+typedef enum
+{
+    RHIO_SWAPCHAIN_HANDLE_TYPE_NONE = 0,    // No native handle (headless or manual surface creation)
+    RHIO_SWAPCHAIN_HANDLE_TYPE_HWND,        // Windows: Win32 HWND + HINSTANCE
+    RHIO_SWAPCHAIN_HANDLE_TYPE_METAL_LAYER, // macOS/iOS: CAMetalLayer*
+    RHIO_SWAPCHAIN_HANDLE_TYPE_X11,         // X11: Display* + Window
+    RHIO_SWAPCHAIN_HANDLE_TYPE_WAYLAND,     // Wayland: wl_display* + wl_surface*
+    RHIO_SWAPCHAIN_HANDLE_TYPE_XCB,         // XCB: xcb_connection_t* + xcb_window_t
+
+} riSwapchainHandleType;
+
+// Texture formats for requesting swapchain images or creating textures
+typedef enum
+{
+    RHIO_TEXTURE_FORMAT_UNDEFINED = 0, // Invalid or backend-default swapchain format
+
+    // Unsigned Normalized 8-bit formats
+    RHIO_TEXTURE_FORMAT_B8G8R8A8_UNORM, // 8-bit BGRA (unsigned normalized)
+    RHIO_TEXTURE_FORMAT_B8G8R8A8_SRGB,  // 8-bit BGRA (sRGB non-linear)
+    RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM, // 8-bit RGBA (unsigned normalized)
+    RHIO_TEXTURE_FORMAT_R8G8B8A8_SRGB,  // 8-bit RGBA (sRGB non-linear)
+
+    // Floating Point formats
+    RHIO_TEXTURE_FORMAT_R16G16B16A16_FLOAT, // 16-bit RGBA (half-precision float)
+    RHIO_TEXTURE_FORMAT_R32G32B32A32_FLOAT, // 32-bit RGBA (full-precision float)
+
+    // Depth/Stencil formats
+    RHIO_TEXTURE_FORMAT_D24_UNORM_S8_UINT, // 24-bit depth (unorm) + 8-bit stencil (uint)
+    RHIO_TEXTURE_FORMAT_D32_FLOAT_S8_UINT, // 32-bit depth (float) + 8-bit stencil (uint)
+
+    // Block Compression (Desktop/Console)
+    RHIO_TEXTURE_FORMAT_BC1_UNORM, // DXT1/BC1 compressed RGB (unorm)
+    RHIO_TEXTURE_FORMAT_BC3_UNORM, // DXT5/BC3 compressed RGBA (unorm)
+    RHIO_TEXTURE_FORMAT_BC7_UNORM, // BC7 compressed RGBA (unorm)
+    RHIO_TEXTURE_FORMAT_BC1_SRGB,  // DXT1/BC1 compressed RGB (sRGB)
+    RHIO_TEXTURE_FORMAT_BC3_SRGB,  // DXT5/BC3 compressed RGBA (sRGB)
+    RHIO_TEXTURE_FORMAT_BC7_SRGB,  // BC7 compressed RGBA (sRGB)
+
+    // ASTC Compression (Mobile/Modern Desktop)
+    RHIO_TEXTURE_FORMAT_ASTC_4x4_UNORM, // ASTC compressed 4x4 block (unorm)
+    RHIO_TEXTURE_FORMAT_ASTC_6x6_UNORM, // ASTC compressed 6x6 block (unorm)
+    RHIO_TEXTURE_FORMAT_ASTC_8x8_UNORM, // ASTC compressed 8x8 block (unorm)
+    RHIO_TEXTURE_FORMAT_ASTC_4x4_SRGB,  // ASTC compressed 4x4 block (sRGB)
+    RHIO_TEXTURE_FORMAT_ASTC_6x6_SRGB,  // ASTC compressed 6x6 block (sRGB)
+    RHIO_TEXTURE_FORMAT_ASTC_8x8_SRGB,  // ASTC compressed 8x8 block (sRGB)
+
+} riTextureFormat;
 
 #pragma endregion // Enumerations
 
@@ -599,6 +656,7 @@ riStatusToString( int status )
             ST( ERROR_INVALID_STATE );
             ST( ERROR_NOT_READY );
             ST( ERROR_UNKNOWN );
+            ST( ERROR_SURFACE_LOST );
 #    undef ST
         }
 
