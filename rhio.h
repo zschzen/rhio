@@ -579,6 +579,9 @@ RI_API riStatus rhioCreateCommandQueue( riDevice device, riCommandQueue * outQue
 RI_API void     rhioDestroyCommandQueue( riCommandQueue queue );
 RI_API riStatus rhioCommandQueueSubmit( riCommandQueue queue, riCommandList commandList );
 
+// Command lists
+RI_API riStatus rhioCreateCommandList( riCommandQueue queue, riCommandList * outCommandList );
+
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
 RI_API void riTraceLog( int logType, const char * text, ... );  // Emit trace log message
