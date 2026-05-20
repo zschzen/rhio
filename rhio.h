@@ -429,6 +429,15 @@ typedef riU64    riSize;
 #    endif
 #endif
 
+// RGBA color in normalized floating-point channels
+typedef struct
+{
+    riF32 r; // Red channel
+    riF32 g; // Green channel
+    riF32 b; // Blue channel
+    riF32 a; // Alpha channel
+} riColor;
+
 #if !defined( RHIO_INIT_INFO_TYPE )
 // Initialization information
 typedef struct
@@ -600,12 +609,13 @@ static void     _rhioBackendDescInit( riBackendDesc * desc );
 static riStatus _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc );
 static riStatus _rhioValidateDeviceVTable( const riDeviceVTable * vtable );
 
-// OpenGL+ES register backend vtable
-//---------------------------------------------------------------------------------
+// OpenGL family backend registration (desktop GL, OpenGL ES and WebGL)
+//----------------------------------------------------------------------------------
 #    if defined( RHIO_BACKEND_OPENGL )                                                                                 \
         || defined( RHIO_BACKEND_OPENGLES )                                                                            \
         || defined( RHIO_BACKEND_OPENGLES2 )                                                                           \
         || defined( RHIO_BACKEND_OPENGLES3 )
+#        define RHIO_BACKEND_GL_ENABLED
 static riStatus _rhioGL_registerBackend( riBackendDesc * desc );
 #    endif
 
@@ -926,7 +936,146 @@ riSetTraceLogCallback( TraceLogCallback callback )
 
 #    pragma region "GL Backend"
 
-#    if defined( RHIO_BACKEND_OPENGL ) || defined( RHIO_BACKEND_OPENGLES )
+#    if defined( RHIO_BACKEND_GL_ENABLED )
+
+//----------------------------------------------------------------------------------
+// Platform GL Headers and Entry Points
+//----------------------------------------------------------------------------------
+// NOTE: rhio does not own an OpenGL context. The application/windowing owns it.
+// This block provides only the minimal types and headers.
+
+// Emscripten / WebGL
+//------------------------------------------------------------------------------
+#        if defined( __EMSCRIPTEN__ )
+
+// NOTE: Emscripten/WebGL exposes GLES symbols directly, so optional entry points
+// can be referenced without a runtime loader
+
+#            if !defined( GL_GLEXT_PROTOTYPES )
+#                define GL_GLEXT_PROTOTYPES 1
+#            endif
+
+#            if defined( RHIO_BACKEND_OPENGLES2 )
+#                include <GLES2/gl2.h>
+#            else
+#                include <GLES3/gl3.h>
+#            endif
+#            include <GLES2/gl2ext.h> // ES extension prototypes used by both GLES2 and GLES3
+
+#            include <emscripten/emscripten.h>
+
+typedef void * riGL_DeviceContext;
+typedef void * riGL_RenderContext;
+
+#            define _RHIO_GL_LOAD( type, name ) ( (type *)name )
+
+// Win32 / WGL
+//------------------------------------------------------------------------------
+#        elif defined( _WIN32 )
+
+// NOTE: Win32 uses WGL for context handles and extension lookup. windows.h must
+// be included before GL/gl.h so HDC/HGLRC are available to the OpenGL header
+
+#            if !defined( WIN32_LEAN_AND_MEAN )
+#                define WIN32_LEAN_AND_MEAN
+#            endif
+#            if !defined( NOMINMAX )
+#                define NOMINMAX
+#            endif
+
+#            include <GL/gl.h>
+#            include <windows.h>
+
+typedef HDC   riGL_DeviceContext;
+typedef HGLRC riGL_RenderContext;
+
+#            define _RHIO_GL_LOAD( type, name ) ( (type *)wglGetProcAddress( #name ) )
+
+// Apple
+//------------------------------------------------------------------------------
+#        elif defined( __APPLE__ )
+
+// NOTE: Apple platforms link GL/GLES entry points directly. Context creation is
+// still owned by the host windowing layer
+
+#            define GL_SILENCE_DEPRECATION
+
+#            if defined( RHIO_BACKEND_OPENGLES ) || defined( RHIO_BACKEND_OPENGLES2 )
+#                include <OpenGLES/ES2/gl.h>
+#            elif defined( RHIO_BACKEND_OPENGLES3 )
+#                include <OpenGLES/ES3/gl.h>
+#            else
+#                include <OpenGL/gl3.h>
+#            endif
+
+typedef void * riGL_DeviceContext;
+typedef void * riGL_RenderContext;
+
+#            define _RHIO_GL_LOAD( type, name ) ( (type *)name )
+
+// Unix-like (Linux / *BSD) / GLX + EGL
+//------------------------------------------------------------------------------
+#        elif defined( __linux__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
+
+// NOTE: Unix-like desktop GL uses GLX for extension lookup. GLES builds generally
+// expose the symbols directly through EGL or the platform loader used by app
+
+#            if defined( RHIO_BACKEND_OPENGLES )                                                                       \
+                || defined( RHIO_BACKEND_OPENGLES2 )                                                                   \
+                || defined( RHIO_BACKEND_OPENGLES3 )
+
+#                if !defined( GL_GLEXT_PROTOTYPES )
+#                    define GL_GLEXT_PROTOTYPES 1
+#                endif
+#                include <EGL/egl.h>
+#                if defined( RHIO_BACKEND_OPENGLES3 )
+#                    include <GLES3/gl3.h> // OpenGL ES 3.0 core API
+#                else
+#                    include <GLES2/gl2.h> // OpenGL ES 2.0 core API
+#                endif
+
+#                include <GLES2/gl2ext.h>  // ES extension prototypes used by both GLES2 and GLES3
+
+typedef void * riGL_DeviceContext;
+typedef void * riGL_RenderContext;
+
+#                define _RHIO_GL_LOAD( type, name ) ( (type *)name )
+
+#            else /* RHIO_BACKEND_OPENGLES */
+
+#                include <GL/gl.h>
+#                include <GL/glext.h>
+#                include <GL/glx.h>
+#                include <X11/Xlib.h>
+
+typedef Display *  riGL_DeviceContext;
+typedef GLXContext riGL_RenderContext;
+
+#                define _RHIO_GL_LOAD( type, name ) ( (type *)glXGetProcAddress( (const GLubyte *)#name ) )
+
+#            endif /* RHIO_BACKEND_OPENGLES || RHIO_BACKEND_OPENGLES2 || RHIO_BACKEND_OPENGLES3 */
+
+// Unsupported
+//------------------------------------------------------------------------------
+#        else
+#            error "RHIO GL backend: unsupported platform"
+#        endif     /* GL platform selection */
+
+//----------------------------------------------------------------------------------
+// Compatibility Defines
+//----------------------------------------------------------------------------------
+
+#        if !defined( GL_SHADING_LANGUAGE_VERSION )
+#            define GL_SHADING_LANGUAGE_VERSION 0x8B8C
+#        endif
+
+#        if !defined( GL_CLAMP ) && defined( GL_CLAMP_TO_EDGE )
+#            define GL_CLAMP GL_CLAMP_TO_EDGE
+#        endif
+
+#        if defined( RHIO_BACKEND_OPENGLES2 )
+#            define glClearDepth glClearDepthf
+#        endif
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition                                    [>>GL_TYPES<<]
@@ -935,24 +1084,48 @@ riSetTraceLogCallback( TraceLogCallback callback )
 // Internal OpenGL device state
 typedef struct riGL_Device
 {
-    int dummyPlaceholder; // TODO: Replace with actual OpenGL resource handles
+    int dummyPlaceholder;
 
 } riGL_Device;
 
 //----------------------------------------------------------------------------------
-// OpenGL Backend Implementation (Stubs)                               [>>GL_IMPL<<]
+// OpenGL Backend Implementation                                       [>>GL_IMPL<<]
 //----------------------------------------------------------------------------------
 
 // Initialize OpenGL state and allocate default resources
 static riStatus
 _rhioGL_init( void * backendDevice, const riBackendInitInfo * info )
 {
-    UNUSED( backendDevice );
+    const GLubyte * vendor      = NULL;
+    const GLubyte * renderer    = NULL;
+    const GLubyte * version     = NULL;
+    const GLubyte * glslVersion = NULL;
+
+    RI_GUARD_NULL( backendDevice, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+
     UNUSED( info );
 
-    // TODO: Initialize GL state, load extensions, create default VAO, etc.
+    // Check OpenGL
+    //------------------------------------------------------------------------------
+    // Validate the core precondition
+    version = glGetString( GL_VERSION );
+    if( RI_UNLIKELY( NULL == version ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND GL: No current OpenGL context" );
+            return RI_ERROR_BACKEND_INIT;
+        }
 
-    TRACELOG( RI_LOG_INFO, "BACKEND GL: Initialized successfully (stub)" );
+    vendor      = glGetString( GL_VENDOR );
+    renderer    = glGetString( GL_RENDERER );
+    glslVersion = glGetString( GL_SHADING_LANGUAGE_VERSION );
+
+    TRACELOG( RI_LOG_INFO, "BACKEND GL: Initialized context" );
+    TRACELOG( RI_LOG_INFO, "    > Version:  %s", version );
+    TRACELOG( RI_LOG_INFO, "    > Renderer: %s", renderer );
+    TRACELOG( RI_LOG_INFO, "    > Vendor:   %s", vendor );
+    TRACELOG( RI_LOG_INFO, "    > GLSL:     %s", glslVersion );
+    //------------------------------------------------------------------------------
 
     return RI_SUCCESS;
 }
@@ -961,15 +1134,18 @@ _rhioGL_init( void * backendDevice, const riBackendInitInfo * info )
 static void
 _rhioGL_shutdown( void * backendDevice )
 {
-    UNUSED( backendDevice );
+    riGL_Device emptyDevice = RI_ZERO_INIT;
 
-    // TODO: Delete allocated GL resources (buffers, textures, shaders)
+    if( NULL != backendDevice )
+        {
+            *(riGL_Device *)backendDevice = emptyDevice;
+        }
 
-    TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete (stub)" );
+    TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete" );
 }
 
 //----------------------------------------------------------------------------------
-// OpenGL Backend Vtable
+// OpenGL Backend Vtable and Registration
 //----------------------------------------------------------------------------------
 #        define BIND_FUNC( name ) .name = _rhioGL_##name
 
@@ -991,7 +1167,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 
     flags = desc->flags;
 
-    // Preserve requested GL flavor before clearing the descriptor
+    // Preserve the requested GL flavor before clearing the descriptor
     if( desc->backend == RI_BACKEND_OPENGLES )
         {
             backend = RI_BACKEND_OPENGLES;
@@ -1010,7 +1186,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     return RI_SUCCESS;
 }
 
-#    endif            /* RHIO_BACKEND_OPENGL || RHIO_BACKEND_OPENGLES */
+#    endif            /* RHIO_BACKEND_GL_ENABLED */
 
 #    pragma endregion // GL Backend
 
@@ -1147,15 +1323,17 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
 
     switch( info->backend )
         {
-#    if defined( RHIO_BACKEND_OPENGL )                                                                                 \
-        || defined( RHIO_BACKEND_OPENGLES )                                                                            \
-        || defined( RHIO_BACKEND_OPENGLES2 )                                                                           \
-        || defined( RHIO_BACKEND_OPENGLES3 )
+#    if defined( RHIO_BACKEND_GL_ENABLED )
 
             // Built-in: OpenGL / OpenGL ES
             //----------------------------------------------------------
-        case RI_BACKEND_OPENGL:
+#        if defined( RHIO_BACKEND_OPENGL )
+        case RI_BACKEND_OPENGL: desc->backend = info->backend; return _rhioGL_registerBackend( desc );
+#        endif
+
+#        if defined( RHIO_BACKEND_OPENGLES ) || defined( RHIO_BACKEND_OPENGLES2 ) || defined( RHIO_BACKEND_OPENGLES3 )
         case RI_BACKEND_OPENGLES: desc->backend = info->backend; return _rhioGL_registerBackend( desc );
+#        endif
 #    endif
 
 #    if defined( RHIO_BACKEND_VULKAN )
