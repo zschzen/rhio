@@ -390,6 +390,10 @@ typedef enum
 // The main RHI device NOTE: Caller-Owned Instance
 typedef struct RI_DEVICE_STRUCT * riDevice;
 
+// Command submission objects
+typedef struct rhioCommandQueue * riCommandQueue;
+typedef struct rhioCommandList *  riCommandList;
+
 #pragma endregion
 
 //----------------------------------------------------------------------------------
@@ -470,9 +474,25 @@ typedef struct riDeviceVTable
     riStatus ( *init )( void * backendDevice, const riBackendInitInfo * info ); // Initialize backend graphics context
     void     ( *shutdown )( void * backendDevice ); // Tear down backend resources and free memory
 
-    //TODO: Add buffers, textures, shaders, pipelines, passes, draw, ...
+    // Queue Management
+    //------------------------------------------------------------------------------
+    riStatus ( *create_command_queue )( void * backendDevice, riCommandQueue queue ); // Initialize a command queue
 
 } riDeviceVTable;
+
+// Command queue dispatch table
+typedef struct riCommandQueueVTable
+{
+    void     ( *destroy_command_queue )( riCommandQueue queue ); // Tear down backend-owned queue resources
+    riStatus ( *submit_command_list )( riCommandQueue queue, riCommandList commandList ); // Submit work
+} riCommandQueueVTable;
+
+// Base structs - must be the first member of every backend resource struct
+typedef struct riCommandQueueBase
+{
+    const riCommandQueueVTable * vtable;
+
+} riCommandQueueBase;
 
 //----------------------------------------------------------------------------------
 // Device creation info                                            [>>DEVICE_INFO<<]
@@ -485,11 +505,12 @@ typedef struct riDeviceVTable
 // set `backend` to `RI_BACKEND_CUSTOM`.
 typedef struct riDeviceInfo
 {
-    riInitInfo     base;              // Basic application info (App name, API version)
-    riBackend      backend;           // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
-    riFlags        flags;             // riDeviceFlag bits requested for this device
-    riDeviceVTable vtable;            // Dynamic interface hook for custom backend vtable
-    riSize         backendDeviceSize; // Bytes of backend-private state RHIO should allocate for custom backends
+    riInitInfo           base;               // Basic application info (App name, API version)
+    riBackend            backend;            // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
+    riFlags              flags;              // riDeviceFlag bits requested for this device
+    riDeviceVTable       vtable;             // Dynamic interface hook for custom backend vtable
+    riCommandQueueVTable commandQueueVTable; // Dynamic interface hook for custom command queue dispatch
+    riSize               backendDeviceSize;  // Bytes of backend-private state RHIO should allocate for custom backends
 
 } riDeviceInfo;
 
@@ -539,6 +560,11 @@ RI_API const char * riStatusToString( int status );
 RI_API riStatus rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice );
 RI_API void     rhioDestroyDevice( riDevice device );
 
+// Command queues
+RI_API riStatus rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue );
+RI_API void     rhioDestroyCommandQueue( riCommandQueue queue );
+RI_API riStatus rhioCommandQueueSubmit( riCommandQueue queue, riCommandList commandList );
+
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
 RI_API void riTraceLog( int logType, const char * text, ... );  // Emit trace log message
@@ -567,11 +593,12 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 // follow the same creation path.
 typedef struct riBackendDesc
 {
-    const char *   name;       // Human-readable backend name for logs
-    riBackend      backend;    // Resolved backend token
-    riDeviceVTable vtable;     // Backend dispatch table
-    riSize         deviceSize; // Bytes of backend-private state RHIO should allocate
-    riFlags        flags;      // riDeviceFlag bits requested for backend initialization
+    const char *         name;               // Human-readable backend name for logs
+    riBackend            backend;            // Resolved backend token
+    riDeviceVTable       vtable;             // Backend dispatch table
+    riCommandQueueVTable commandQueueVTable; // Command queue dispatch table
+    riSize               deviceSize;         // Bytes of backend-private state RHIO should allocate
+    riFlags              flags;              // riDeviceFlag bits requested for backend initialization
 
 } riBackendDesc;
 
@@ -585,13 +612,21 @@ typedef struct riBackendDesc
 
 struct RI_DEVICE_STRUCT
 {
-    riBackend      backend;   // Resolved backend token
-    riFlags        flags;     // riDeviceFlag bits enabled at creation
-    riDeviceVTable vtable;    // Dispatch table used by public API entry points
+    riBackend            backend;            // Resolved backend token
+    riFlags              flags;              // riDeviceFlag bits enabled at creation
+    riDeviceVTable       vtable;             // Dispatch table used by public API entry points
+    riCommandQueueVTable commandQueueVTable; // Dispatch table for command queue public API entry points
 
-    void * backendDevice;     // Backend-private state passed to every vtable call
+    void * backendDevice;                    // Backend-private state passed to every vtable call
 
-    const char * backendName; // Stable backend name used for diagnostics
+    const char * backendName;                // Stable backend name used for diagnostics
+};
+
+// Backend- command queue wrapper
+struct rhioCommandQueue
+{
+    riCommandQueueBase base;   // Must remain first for base-style dispatch
+    riDevice           device; // Owning device
 };
 
 //----------------------------------------------------------------------------------
@@ -608,6 +643,7 @@ static TraceLogCallback rhio_traceLog     = NULL;
 static void     _rhioBackendDescInit( riBackendDesc * desc );
 static riStatus _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc );
 static riStatus _rhioValidateDeviceVTable( const riDeviceVTable * vtable );
+static riStatus _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable );
 
 // OpenGL family backend registration (desktop GL, OpenGL ES and WebGL)
 //----------------------------------------------------------------------------------
@@ -734,10 +770,11 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 
     // Device State Initialization
     //----------------------------------------------------------
-    device->backend     = desc.backend;
-    device->flags       = desc.flags;
-    device->vtable      = desc.vtable;
-    device->backendName = desc.name;
+    device->backend            = desc.backend;
+    device->flags              = desc.flags;
+    device->vtable             = desc.vtable;
+    device->commandQueueVTable = desc.commandQueueVTable;
+    device->backendName        = desc.name;
 
     // Backend Context Allocation
     //----------------------------------------------------------
@@ -833,6 +870,101 @@ rhioDestroyDevice( riDevice device )
 }
 
 #    pragma endregion // Lifecycle
+
+/* ---------------------------------------------------------------------------------
+ *
+ * COMMAND QUEUES                                                 [>>COMMAND_QUEUE<<]
+ *
+ * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Command Queues"
+
+// Create a command queue wrapper bound to a device backend
+RI_API riStatus
+rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
+{
+    riCommandQueue queue  = NULL;
+    riStatus       status = RI_ERROR_UNKNOWN;
+
+    // Output Handle Initialization
+    //----------------------------------------------------------
+    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    *outQueue = NULL;
+
+    // Input Validation
+    //----------------------------------------------------------
+    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
+
+    // Command Queue Dispatch Validation
+    //----------------------------------------------------------
+    status = _rhioValidateCommandQueueVTable( &device->commandQueueVTable );
+    if( RI_FAILED( status ) ) return status;
+
+    RI_GUARD_NULL( device->vtable.create_command_queue, RI_ERROR_INVALID_STATE );
+
+    // Command Queue Wrapper Allocation
+    //----------------------------------------------------------
+    queue = (riCommandQueue)RI_CALLOC( 1, sizeof( *queue ) );
+    if( RI_UNLIKELY( NULL == queue ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Allocation failed. OOM" );
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Command Queue State Initialization
+    //----------------------------------------------------------
+    queue->base.vtable = &device->commandQueueVTable;
+    queue->device      = device;
+
+    // Backend Queue Creation
+    //----------------------------------------------------------
+    status = device->vtable.create_command_queue( device->backendDevice, queue );
+    if( RI_FAILED( status ) )
+        {
+            TRACELOG(
+                RI_LOG_ERROR, "COMMAND_QUEUE: Backend creation failed: %s (%d)", riStatusToString( status ), status );
+            RI_FREE( queue );
+            return status;
+        }
+
+    // Command Queue Handle Handoff
+    //----------------------------------------------------------
+    *outQueue = queue;
+
+    TRACELOG( RI_LOG_INFO, "COMMAND_QUEUE: Created successfully" );
+
+    return RI_SUCCESS;
+}
+
+// Destroy a command queue wrapper and release queue resources
+RI_API void
+rhioDestroyCommandQueue( riCommandQueue queue )
+{
+    if( NULL == queue ) return;
+
+    if( NULL != queue->base.vtable && NULL != queue->base.vtable->destroy_command_queue )
+        {
+            queue->base.vtable->destroy_command_queue( queue );
+        }
+
+    RI_FREE( queue );
+
+    TRACELOG( RI_LOG_INFO, "COMMAND_QUEUE: Destroyed successfully" );
+}
+
+// Submit one command list through a command queue
+RI_API riStatus
+rhioCommandQueueSubmit( riCommandQueue queue, riCommandList commandList )
+{
+    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( queue->base.vtable, RI_ERROR_INVALID_STATE );
+    RI_GUARD_NULL( queue->base.vtable->submit_command_list, RI_ERROR_INVALID_STATE );
+
+    return queue->base.vtable->submit_command_list( queue, commandList );
+}
+
+#    pragma endregion // Command Queues
 
 #    pragma endregion // API Impl
 
@@ -1144,6 +1276,33 @@ _rhioGL_shutdown( void * backendDevice )
     TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete" );
 }
 
+// Initialize an OpenGL command queue wrapper
+static riStatus
+_rhioGL_create_command_queue( void * backendDevice, riCommandQueue queue )
+{
+    UNUSED( backendDevice );
+    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+
+    return RI_SUCCESS;
+}
+
+// Tear down OpenGL command queue state
+static void
+_rhioGL_destroy_command_queue( riCommandQueue queue )
+{
+    UNUSED( queue );
+}
+
+// Submit one command list to the OpenGL backend
+static riStatus
+_rhioGL_submit_command_list( riCommandQueue queue, riCommandList commandList )
+{
+    UNUSED( commandList );
+    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+
+    return RI_SUCCESS;
+}
+
 //----------------------------------------------------------------------------------
 // OpenGL Backend Vtable and Registration
 //----------------------------------------------------------------------------------
@@ -1152,6 +1311,12 @@ _rhioGL_shutdown( void * backendDevice )
 static const riDeviceVTable s_gl_vtable = {
     BIND_FUNC( init ),
     BIND_FUNC( shutdown ),
+    BIND_FUNC( create_command_queue ),
+};
+
+static const riCommandQueueVTable s_gl_command_queue_vtable = {
+    BIND_FUNC( destroy_command_queue ),
+    BIND_FUNC( submit_command_list ),
 };
 
 #        undef BIND_FUNC
@@ -1180,8 +1345,11 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     desc->name       = ( backend == RI_BACKEND_OPENGLES ) ? "OpenGL ES" : "OpenGL";
     desc->backend    = backend;
     desc->deviceSize = (riSize)sizeof( riGL_Device );
-    desc->vtable     = s_gl_vtable;
     desc->flags      = flags;
+
+    // VTable
+    desc->vtable             = s_gl_vtable;
+    desc->commandQueueVTable = s_gl_command_queue_vtable;
 
     return RI_SUCCESS;
 }
@@ -1276,11 +1444,37 @@ _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 
     CHECK_VTABLE_SLOT( init );
     CHECK_VTABLE_SLOT( shutdown );
+    CHECK_VTABLE_SLOT( create_command_queue );
 
 #    undef CHECK_VTABLE_SLOT
 
     // TODO: Validate required resource dispatch slots here when buffers,
     // textures, samplers, shaders, render passes, and command lists are added.
+
+    return RI_SUCCESS;
+}
+
+// Ensure a command queue exposes callbacks required by the public queue API
+static riStatus
+_rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable )
+{
+    RI_GUARD_NULL( vtable, RI_ERROR_INVALID_PARAM );
+
+#    define CHECK_QUEUE_VTABLE_SLOT( name )                                                                            \
+        do                                                                                                             \
+            {                                                                                                          \
+                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
+                    {                                                                                                  \
+                        TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Missing required vtable slot '%s'", #name );           \
+                        return RI_ERROR_INVALID_STATE;                                                                 \
+                    }                                                                                                  \
+            }                                                                                                          \
+        while( 0 )
+
+    CHECK_QUEUE_VTABLE_SLOT( destroy_command_queue );
+    CHECK_QUEUE_VTABLE_SLOT( submit_command_list );
+
+#    undef CHECK_QUEUE_VTABLE_SLOT
 
     return RI_SUCCESS;
 }
@@ -1308,11 +1502,12 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
     // slots are reported by `_rhioValidateDeviceVTable()`.
     if( info->vtable.init != NULL )
         {
-            desc->name       = "Custom";
-            desc->backend    = RI_BACKEND_CUSTOM;
-            desc->vtable     = info->vtable;
-            desc->deviceSize = info->backendDeviceSize;
-            desc->flags      = info->flags;
+            desc->name               = "Custom";
+            desc->backend            = RI_BACKEND_CUSTOM;
+            desc->vtable             = info->vtable;
+            desc->commandQueueVTable = info->commandQueueVTable;
+            desc->deviceSize         = info->backendDeviceSize;
+            desc->flags              = info->flags;
             return RI_SUCCESS;
         }
 

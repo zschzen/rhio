@@ -58,6 +58,7 @@ target_compile_definitions(rhio_unit_config INTERFACE RHIO_LOG_SUPPORT)
 # --------------------------------------------------------------------
 # These files are also scanned below to keep CTest registration automatic
 set(RHIO_UNIT_TEST_SOURCES
+  command_queue_tests.c
   device_tests.c
   logging_tests.c
   status_tests.c

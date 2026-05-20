@@ -99,6 +99,15 @@ custom_backend_shutdown( void * backendDevice )
         }
 }
 
+static riStatus
+custom_backend_create_command_queue( void * backendDevice, riCommandQueue queue )
+{
+    UNUSED( backendDevice );
+    UNUSED( queue );
+
+    return RI_SUCCESS;
+}
+
 // Simulates a backend init failure after partially touching backend state
 static riStatus
 custom_backend_init_failure( void * backendDevice, const riBackendInitInfo * info )
@@ -175,10 +184,11 @@ TEST( device, rejects_unknown_flags )
     // Invalid flag setup
     // ----------------------------------------------------------
     // Unknown bits must fail validation before backend callbacks are reached
-    info.flags             = (riFlags)( RI_DEVICE_FLAG_DEBUG << 1 );
-    info.vtable.init       = custom_backend_init_success;
-    info.vtable.shutdown   = custom_backend_shutdown;
-    info.backendDeviceSize = sizeof( CustomBackendDeviceState );
+    info.flags                       = (riFlags)( RI_DEVICE_FLAG_DEBUG << 1 );
+    info.vtable.init                 = custom_backend_init_success;
+    info.vtable.shutdown             = custom_backend_shutdown;
+    info.vtable.create_command_queue = custom_backend_create_command_queue;
+    info.backendDeviceSize           = sizeof( CustomBackendDeviceState );
 
     // Validation result
     // ----------------------------------------------------------
@@ -192,7 +202,7 @@ TEST( device, rejects_unknown_flags )
 // Custom Backend Validation
 //----------------------------------------------------------------------------------
 
-// Rejects a custom backend vtable that cannot both init and shutdown
+// Rejects a custom backend vtable that cannot init, shutdown, and create queues
 TEST( device, rejects_incomplete_custom_backend )
 {
     riDevice     device = NULL;
@@ -203,7 +213,7 @@ TEST( device, rejects_incomplete_custom_backend )
 
     // Incomplete vtable
     // ----------------------------------------------------------
-    // Custom backends must expose both init and shutdown entry points
+    // Custom backends must expose the required device entry points
     info.vtable.init       = custom_backend_init_success;
     info.backendDeviceSize = sizeof( CustomBackendDeviceState );
 
@@ -226,12 +236,13 @@ TEST( device, passes_zeroed_state_to_custom_backend )
 
     // Custom backend setup
     // ----------------------------------------------------------
-    info.base.appName      = "rhio unit";
-    info.backend           = RI_BACKEND_CUSTOM;
-    info.flags             = RI_DEVICE_FLAG_DEBUG;
-    info.vtable.init       = custom_backend_init_success;
-    info.vtable.shutdown   = custom_backend_shutdown;
-    info.backendDeviceSize = sizeof( CustomBackendDeviceState );
+    info.base.appName                = "rhio unit";
+    info.backend                     = RI_BACKEND_CUSTOM;
+    info.flags                       = RI_DEVICE_FLAG_DEBUG;
+    info.vtable.init                 = custom_backend_init_success;
+    info.vtable.shutdown             = custom_backend_shutdown;
+    info.vtable.create_command_queue = custom_backend_create_command_queue;
+    info.backendDeviceSize           = sizeof( CustomBackendDeviceState );
 
     // Create path
     // ----------------------------------------------------------
@@ -267,9 +278,10 @@ TEST( device, cleans_up_after_failed_init )
     // Failing backend setup
     // ----------------------------------------------------------
     // NOTE: The non-null stale handle checks that RHIO nulls output on failure.
-    info.vtable.init       = custom_backend_init_failure;
-    info.vtable.shutdown   = custom_backend_shutdown;
-    info.backendDeviceSize = sizeof( CustomBackendDeviceState );
+    info.vtable.init                 = custom_backend_init_failure;
+    info.vtable.shutdown             = custom_backend_shutdown;
+    info.vtable.create_command_queue = custom_backend_create_command_queue;
+    info.backendDeviceSize           = sizeof( CustomBackendDeviceState );
 
     // Cleanup path
     // ----------------------------------------------------------
