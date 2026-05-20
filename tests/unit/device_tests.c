@@ -15,11 +15,6 @@
 // Marker used to verify that init correctly touched the state
 #define CUSTOM_BACKEND_INIT_MARKER 0xCAFEBABE
 
-enum
-{
-    RI_BACKEND_CUSTOM = 100 // Test-only backend token
-};
-
 // Backend-private state allocated by RHIO for the custom backend test double
 typedef struct CustomBackendDeviceState
 {
