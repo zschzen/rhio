@@ -488,9 +488,10 @@ typedef struct riDeviceVTable
 // Command queue dispatch table
 typedef struct riCommandQueueVTable
 {
-    riStatus ( *create_command_list )( riCommandQueue queue, riCommandList * outCommandList ); // Initialize a queue-owned command list
-    void     ( *destroy_command_queue )( riCommandQueue queue ); // Tear down backend-owned queue resources
-    riStatus ( *submit_command_list )( riCommandQueue queue, riCommandList commandList ); // Submit work
+    riStatus ( *create_command_list )( riCommandQueue queue, riCommandList * outCommandList );
+    void     ( *destroy_command_queue )( riCommandQueue queue );
+    riStatus ( *submit_command_list )( riCommandQueue queue, riCommandList commandList );
+
 } riCommandQueueVTable;
 
 //----------------------------------------------------------------------------------
@@ -1267,7 +1268,6 @@ struct riGL_CommandList
 {
     riGL_CommandList * next;  // Next queue-owned command list
     riCommandQueue     queue; // Owning queue for future GL command-buffer emulation
-
 };
 
 // Device
