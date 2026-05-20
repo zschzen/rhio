@@ -516,17 +516,15 @@ DECLARE_RI_BASE( riCommandQueue );
 
 // Device Initialization Information
 // NOTE: Holds configuration for creating a rendering device.
-// If `vtable.init` is set, the built-in backend selection
-// is bypassed and the custom vtable is used directly;
+// If `vtable` is set, the built-in backend selection is bypassed;
 // set `backend` to `RI_BACKEND_CUSTOM`.
 typedef struct riDeviceInfo
 {
-    riInitInfo           base;               // Basic application info (App name, API version)
-    riBackend            backend;            // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
-    riFlags              flags;              // riDeviceFlag bits requested for this device
-    riDeviceVTable       vtable;             // Dynamic interface hook for custom backend vtable
-    riCommandQueueVTable commandQueueVTable; // Dynamic interface hook for custom command queue dispatch
-    riSize               backendDeviceSize;  // Bytes of backend-private state RHIO should allocate for custom backends
+    riInitInfo             base;              // Basic application info (App name, API version)
+    riBackend              backend;           // Built-in backend selection token (RI_BACKEND_OPENGL, RI_BACKEND_VULKAN)
+    riFlags                flags;             // riDeviceFlag bits requested for this device
+    const riDeviceVTable * vtable;            // Custom backend device dispatch (NULL for built-in)
+    riSize                 backendDeviceSize; // Bytes to allocate for custom backend device struct
 
 } riDeviceInfo;
 
@@ -609,12 +607,11 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 // follow the same creation path.
 typedef struct riBackendDesc
 {
-    const char *         name;               // Human-readable backend name for logs
-    riBackend            backend;            // Resolved backend token
-    riDeviceVTable       vtable;             // Backend dispatch table
-    riCommandQueueVTable commandQueueVTable; // Command queue dispatch table
-    riSize               deviceSize;         // Bytes of backend-private state RHIO should allocate
-    riFlags              flags;              // riDeviceFlag bits requested for backend initialization
+    const char *           name;       // Human-readable backend name for logs
+    riBackend              backend;    // Resolved backend token
+    const riDeviceVTable * vtable;     // Pointer to static backend device dispatch table
+    riSize                 deviceSize; // sizeof(Backend_Device) - base struct must be first member
+    riFlags                flags;      // riDeviceFlag bits requested for backend initialization
 
 } riBackendDesc;
 
