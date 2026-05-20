@@ -1564,7 +1564,7 @@ _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
                 if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
                     {                                                                                                  \
                         TRACELOG( RI_LOG_ERROR, "BACKEND: Missing required vtable slot '%s'", #name );                 \
-                        return RI_ERROR_INVALID_PARAM;                                                                 \
+                        return RI_ERROR_INVALID_STATE;                                                                 \
                     }                                                                                                  \
             }                                                                                                          \
         while( 0 )
