@@ -387,12 +387,17 @@ typedef enum
 
 #pragma region "Opaque resource handles"
 
+// Opaque type macro
+#define RHIO_OPAQUE_TYPE( name ) typedef struct name##_opaque * name
+
 // The main RHI device NOTE: Caller-Owned Instance
-typedef struct RI_DEVICE_STRUCT * riDevice;
+RHIO_OPAQUE_TYPE( riDevice );
 
 // Command submission objects
-typedef struct rhioCommandQueue * riCommandQueue;
-typedef struct rhioCommandList *  riCommandList;
+RHIO_OPAQUE_TYPE( riCommandQueue );
+RHIO_OPAQUE_TYPE( riCommandList );
+
+#undef RHIO_OPAQUE_TYPE
 
 #pragma endregion
 
@@ -487,12 +492,22 @@ typedef struct riCommandQueueVTable
     riStatus ( *submit_command_list )( riCommandQueue queue, riCommandList commandList ); // Submit work
 } riCommandQueueVTable;
 
-// Base structs - must be the first member of every backend resource struct
-typedef struct riCommandQueueBase
-{
-    const riCommandQueueVTable * vtable;
+//----------------------------------------------------------------------------------
+// Base Struct Declaration Helpers
+//----------------------------------------------------------------------------------
+// Automates the creation of base struct: <Name>Base with a single vtable pointer
+#define DECLARE_RI_BASE( Name )                                                                                        \
+    typedef struct Name##Base                                                                                          \
+    {                                                                                                                  \
+        const Name##VTable * vtable;                                                                                   \
+    } Name##Base
 
-} riCommandQueueBase;
+// Base struct definitions
+//----------------------------------------------------------
+DECLARE_RI_BASE( riDevice );
+DECLARE_RI_BASE( riCommandQueue );
+
+#undef DECLARE_RI_BASE
 
 //----------------------------------------------------------------------------------
 // Device creation info                                            [>>DEVICE_INFO<<]
