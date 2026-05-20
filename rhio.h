@@ -1520,8 +1520,10 @@ _rhioVK_registerBackend( riBackendDesc * desc )
     //----------------------------------------------------------
     desc->name    = "Vulkan";
     desc->backend = RI_BACKEND_VULKAN;
-    desc->vtable  = s_vk_vtable;
     desc->flags   = flags;
+
+    // VTable
+    desc->vtable = &s_vk_vtable;
 
     TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan backend registration is not implemented yet" );
 
