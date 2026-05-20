@@ -476,18 +476,19 @@ typedef struct riDeviceVTable
 {
     // Lifecycle Management
     //------------------------------------------------------------------------------
-    riStatus ( *init )( void * backendDevice, const riBackendInitInfo * info ); // Initialize backend graphics context
-    void     ( *shutdown )( void * backendDevice ); // Tear down backend resources and free memory
+    riStatus ( *init )( riDevice device, const riBackendInitInfo * info ); // Initialize backend graphics context
+    void     ( *shutdown )( riDevice device ); // Tear down backend resources and free memory
 
     // Queue Management
     //------------------------------------------------------------------------------
-    riStatus ( *create_command_queue )( void * backendDevice, riCommandQueue queue ); // Initialize a command queue
+    riStatus ( *create_command_queue )( riDevice device, riCommandQueue * outQueue ); // Initialize a command queue
 
 } riDeviceVTable;
 
 // Command queue dispatch table
 typedef struct riCommandQueueVTable
 {
+    riStatus ( *create_command_list )( riCommandQueue queue, riCommandList * outCommandList ); // Initialize a queue-owned command list
     void     ( *destroy_command_queue )( riCommandQueue queue ); // Tear down backend-owned queue resources
     riStatus ( *submit_command_list )( riCommandQueue queue, riCommandList commandList ); // Submit work
 } riCommandQueueVTable;
