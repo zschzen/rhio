@@ -621,29 +621,9 @@ typedef struct riBackendDesc
 //----------------------------------------------------------------------------------
 // Internal device struct (hidden from callers — Handle pattern)
 //
-// The public `riDevice` typedef is `struct RI_DEVICE_STRUCT*`.  The
-// definition only exists inside RHIO_IMPLEMENTATION, so callers can never
-// peek at the members.
+// The public `riDevice` typedef is `struct riDevice_opaque*`.  Backend structs
+// expose dispatch by embedding `riDeviceBase` as their first member.
 //----------------------------------------------------------------------------------
-
-struct RI_DEVICE_STRUCT
-{
-    riBackend            backend;            // Resolved backend token
-    riFlags              flags;              // riDeviceFlag bits enabled at creation
-    riDeviceVTable       vtable;             // Dispatch table used by public API entry points
-    riCommandQueueVTable commandQueueVTable; // Dispatch table for command queue public API entry points
-
-    void * backendDevice;                    // Backend-private state passed to every vtable call
-
-    const char * backendName;                // Stable backend name used for diagnostics
-};
-
-// Backend- command queue wrapper
-struct rhioCommandQueue
-{
-    riCommandQueueBase base;   // Must remain first for base-style dispatch
-    riDevice           device; // Owning device
-};
 
 //----------------------------------------------------------------------------------
 // Module Internal State
@@ -739,11 +719,12 @@ riStatusToString( int status )
 RI_API riStatus
 rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 {
-    riStatus                  status               = RI_ERROR_UNKNOWN;
-    riBackendDesc             desc                 = RI_ZERO_INIT;
-    riBackendInitInfo         backendInitInfo      = RI_ZERO_INIT;
-    struct RI_DEVICE_STRUCT * device               = NULL;
-    bool                      backendInitAttempted = false;
+    riStatus          status          = RI_ERROR_UNKNOWN;
+    riBackendDesc     desc            = RI_ZERO_INIT;
+    riBackendInitInfo backendInitInfo = RI_ZERO_INIT;
+    riDevice          device          = NULL;
+    riDeviceBase *    deviceBase      = NULL;
+    riSize            deviceSize      = 0;
 
     TRACELOG( RI_LOG_INFO, "Initializing rhio %s", RHIO_VERSION_STRING );
 
@@ -756,28 +737,41 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
     //----------------------------------------------------------
     RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
 
-    // Backend Descriptor Resolution
+    // Resolve Backend Info
     //----------------------------------------------------------
-    // Convert caller config into one normalized descriptor for all backend types
     status = _rhioResolveBackendDesc( info, &desc );
-    if( RI_FAILED( status ) ) goto fail;
-
-    // Display current device info
-    TRACELOG( RI_LOG_INFO, "DEVICE: Creating device" );
-    TRACELOG( RI_LOG_INFO, "    > app: %s", STR_NONEMPTY( info->base.appName ) ? info->base.appName : "unnamed app" );
-    TRACELOG( RI_LOG_INFO, "    > backend: %s", STR_NONEMPTY( desc.name ) ? desc.name : "unknown" );
-    TRACELOG( RI_LOG_INFO, "    > flags: 0x%08x", (unsigned int)desc.flags );
+    if( RI_FAILED( status ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Failed to resolve backend descriptor: %d", status );
+            goto fail;
+        }
 
     // Backend Vtable Validation
     //----------------------------------------------------------
     // Catch incomplete custom backends before allocating backend-private state
-    status = _rhioValidateDeviceVTable( &desc.vtable );
+    status = _rhioValidateDeviceVTable( desc.vtable );
     if( RI_FAILED( status ) ) goto fail;
 
     // Device Allocation
     //----------------------------------------------------------
-    device = (struct RI_DEVICE_STRUCT *)RI_CALLOC( 1, sizeof( *device ) );
-    if( RI_UNLIKELY( device == NULL ) )
+    // Allocate the backend-specific struct, which MUST have riDeviceBase as its first member
+    deviceSize = desc.deviceSize > 0 ? desc.deviceSize : (riSize)sizeof( riDeviceBase );
+    if( RI_UNLIKELY( deviceSize < (riSize)sizeof( riDeviceBase ) ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Backend device size is smaller than riDeviceBase" );
+            status = RI_ERROR_INVALID_PARAM;
+            goto fail;
+        }
+
+    if( RI_UNLIKELY( deviceSize > (riSize)( (size_t)-1 ) ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "DEVICE: Backend device allocation size is too large" );
+            status = RI_ERROR_OUT_OF_MEMORY;
+            goto fail;
+        }
+
+    deviceBase = (riDeviceBase *)RI_CALLOC( 1, (size_t)deviceSize );
+    if( RI_UNLIKELY( deviceBase == NULL ) )
         {
             TRACELOG( RI_LOG_ERROR, "DEVICE: Out of memory in %s", __func__ );
             status = RI_ERROR_OUT_OF_MEMORY;
@@ -786,41 +780,18 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 
     // Device State Initialization
     //----------------------------------------------------------
-    device->backend            = desc.backend;
-    device->flags              = desc.flags;
-    device->vtable             = desc.vtable;
-    device->commandQueueVTable = desc.commandQueueVTable;
-    device->backendName        = desc.name;
-
-    // Backend Context Allocation
-    //----------------------------------------------------------
-    // NOTE: deviceSize == 0 is valid; the backend receives NULL and manages state elsewhere.
-    if( desc.deviceSize > 0 )
-        {
-            if( RI_UNLIKELY( desc.deviceSize > (riSize)( (size_t)-1 ) ) )
-                {
-                    TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation size is too large" );
-                    status = RI_ERROR_OUT_OF_MEMORY;
-                    goto fail;
-                }
-
-            device->backendDevice = RI_CALLOC( 1, (size_t)desc.deviceSize );
-            if( RI_UNLIKELY( device->backendDevice == NULL ) )
-                {
-                    TRACELOG( RI_LOG_ERROR, "DEVICE: Backend state allocation failed. OOM" );
-                    status = RI_ERROR_OUT_OF_MEMORY;
-                    goto fail;
-                }
-        }
+    deviceBase->vtable = desc.vtable;
+    device             = (riDevice)deviceBase;
 
     // Backend Initialization
     //----------------------------------------------------------
-    // Backend receives its private state plus normalized initialization info.
+    // Backend receives its allocated private state and init info.
     // NOTE: shutdown is called on init failure so backends can centralize cleanup.
     backendInitInfo.base  = info->base;
     backendInitInfo.flags = desc.flags;
-    backendInitAttempted  = true;
-    status                = device->vtable.init( device->backendDevice, &backendInitInfo );
+
+    // Call vtable init
+    status = deviceBase->vtable->init( device, &backendInitInfo );
     if( RI_FAILED( status ) )
         {
             TRACELOG(
@@ -828,29 +799,25 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
             goto fail;
         }
 
-    // Device Handle Handoff
+    // Output Handle Handoff
     //----------------------------------------------------------
     *outDevice = device;
 
     TRACELOG( RI_LOG_INFO,
               "DEVICE: Created successfully using %s backend",
-              STR_NONEMPTY( device->backendName ) ? device->backendName : "unknown" );
+              STR_NONEMPTY( desc.name ) ? desc.name : "unknown" );
 
     return RI_SUCCESS;
 
 fail:
     // Failure Cleanup
     //----------------------------------------------------------
-    if( device != NULL )
+    if( NULL != device )
         {
-            if( backendInitAttempted && device->vtable.shutdown != NULL )
+            deviceBase = (riDeviceBase *)device;
+            if( deviceBase->vtable != NULL && deviceBase->vtable->shutdown != NULL )
                 {
-                    device->vtable.shutdown( device->backendDevice );
-                }
-
-            if( device->backendDevice != NULL )
-                {
-                    RI_FREE( device->backendDevice );
+                    deviceBase->vtable->shutdown( device );
                 }
 
             RI_FREE( device );
@@ -859,27 +826,27 @@ fail:
     return status;
 }
 
-// Destroy graphics device, shutdown backend, and free associated memory
+// Tear down a graphics device and all associated resources
 RI_API void
 rhioDestroyDevice( riDevice device )
 {
-    if( device == NULL ) return;
+    riDeviceBase * deviceBase = NULL;
+
+    RI_GUARD_NULL_VOID( device );
+
+    deviceBase = (riDeviceBase *)device;
 
     // Backend Shutdown
     //----------------------------------------------------------
-    // NOTE: shutdown receives the same private state pointer passed to init().
-    if( device->vtable.shutdown != NULL )
+    // NOTE: shutdown receives the base struct handle
+    if( deviceBase->vtable != NULL && deviceBase->vtable->shutdown != NULL )
         {
-            device->vtable.shutdown( device->backendDevice );
+            deviceBase->vtable->shutdown( device );
         }
 
     // Device Memory Cleanup
     //----------------------------------------------------------
-    if( device->backendDevice != NULL )
-        {
-            RI_FREE( device->backendDevice );
-        }
-
+    // device points to the base of the backend struct, allocated in a single block.
     RI_FREE( device );
 
     TRACELOG( RI_LOG_INFO, "DEVICE: Destroyed successfully" );
@@ -899,8 +866,9 @@ rhioDestroyDevice( riDevice device )
 RI_API riStatus
 rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
 {
-    riCommandQueue queue  = NULL;
-    riStatus       status = RI_ERROR_UNKNOWN;
+    riDeviceBase *       deviceBase = NULL;
+    riCommandQueueBase * queueBase  = NULL;
+    riStatus             status     = RI_ERROR_UNKNOWN;
 
     // Output Handle Initialization
     //----------------------------------------------------------
@@ -910,42 +878,42 @@ rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
     // Input Validation
     //----------------------------------------------------------
     RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
+    deviceBase = (riDeviceBase *)device;
 
-    // Command Queue Dispatch Validation
+    // Device Dispatch Validation
     //----------------------------------------------------------
-    status = _rhioValidateCommandQueueVTable( &device->commandQueueVTable );
-    if( RI_FAILED( status ) ) return status;
-
-    RI_GUARD_NULL( device->vtable.create_command_queue, RI_ERROR_INVALID_STATE );
-
-    // Command Queue Wrapper Allocation
-    //----------------------------------------------------------
-    queue = (riCommandQueue)RI_CALLOC( 1, sizeof( *queue ) );
-    if( RI_UNLIKELY( NULL == queue ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Allocation failed. OOM" );
-            return RI_ERROR_OUT_OF_MEMORY;
-        }
-
-    // Command Queue State Initialization
-    //----------------------------------------------------------
-    queue->base.vtable = &device->commandQueueVTable;
-    queue->device      = device;
+    RI_GUARD_NULL( deviceBase->vtable, RI_ERROR_INVALID_STATE );
+    RI_GUARD_NULL( deviceBase->vtable->create_command_queue, RI_ERROR_INVALID_STATE );
 
     // Backend Queue Creation
     //----------------------------------------------------------
-    status = device->vtable.create_command_queue( device->backendDevice, queue );
+    // Backend allocates the full structure, sets the base fields, and returns it
+    status = deviceBase->vtable->create_command_queue( device, outQueue );
     if( RI_FAILED( status ) )
         {
             TRACELOG(
                 RI_LOG_ERROR, "COMMAND_QUEUE: Backend creation failed: %s (%d)", riStatusToString( status ), status );
-            RI_FREE( queue );
+            *outQueue = NULL;
             return status;
         }
 
-    // Command Queue Handle Handoff
+    RI_GUARD_NULL( *outQueue, RI_ERROR_INVALID_STATE );
+
+    // Command Queue Dispatch Validation
     //----------------------------------------------------------
-    *outQueue = queue;
+    queueBase = (riCommandQueueBase *)*outQueue;
+    status    = _rhioValidateCommandQueueVTable( queueBase->vtable );
+    if( RI_FAILED( status ) )
+        {
+            if( queueBase->vtable != NULL && queueBase->vtable->destroy_command_queue != NULL )
+                {
+                    queueBase->vtable->destroy_command_queue( *outQueue );
+                }
+
+            RI_FREE( *outQueue );
+            *outQueue = NULL;
+            return status;
+        }
 
     TRACELOG( RI_LOG_INFO, "COMMAND_QUEUE: Created successfully" );
 
@@ -956,11 +924,15 @@ rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
 RI_API void
 rhioDestroyCommandQueue( riCommandQueue queue )
 {
+    riCommandQueueBase * queueBase = NULL;
+
     if( NULL == queue ) return;
 
-    if( NULL != queue->base.vtable && NULL != queue->base.vtable->destroy_command_queue )
+    queueBase = (riCommandQueueBase *)queue;
+
+    if( NULL != queueBase->vtable && NULL != queueBase->vtable->destroy_command_queue )
         {
-            queue->base.vtable->destroy_command_queue( queue );
+            queueBase->vtable->destroy_command_queue( queue );
         }
 
     RI_FREE( queue );
@@ -968,16 +940,62 @@ rhioDestroyCommandQueue( riCommandQueue queue )
     TRACELOG( RI_LOG_INFO, "COMMAND_QUEUE: Destroyed successfully" );
 }
 
+// Create a command list through the queue backend that will submit it
+RI_API riStatus
+rhioCreateCommandList( riCommandQueue queue, riCommandList * outCommandList )
+{
+    riCommandQueueBase * queueBase = NULL;
+    riStatus             status    = RI_ERROR_UNKNOWN;
+
+    // Output Handle Initialization
+    //----------------------------------------------------------
+    RI_GUARD_NULL( outCommandList, RI_ERROR_INVALID_PARAM );
+    *outCommandList = NULL;
+
+    // Input Validation
+    //----------------------------------------------------------
+    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+    queueBase = (riCommandQueueBase *)queue;
+
+    // Queue Dispatch Validation
+    //----------------------------------------------------------
+    RI_GUARD_NULL( queueBase->vtable, RI_ERROR_INVALID_STATE );
+    RI_GUARD_NULL( queueBase->vtable->create_command_list, RI_ERROR_INVALID_STATE );
+
+    // Backend Command List Creation
+    //----------------------------------------------------------
+    // Command lists are created from queues so backends can bind queue-family state.
+    status = queueBase->vtable->create_command_list( queue, outCommandList );
+    if( RI_FAILED( status ) )
+        {
+            TRACELOG(
+                RI_LOG_ERROR, "COMMAND_LIST: Backend creation failed: %s (%d)", riStatusToString( status ), status );
+            *outCommandList = NULL;
+            return status;
+        }
+
+    RI_GUARD_NULL( *outCommandList, RI_ERROR_INVALID_STATE );
+
+    TRACELOG( RI_LOG_INFO, "COMMAND_LIST: Created successfully" );
+
+    return RI_SUCCESS;
+}
+
 // Submit one command list through a command queue
 RI_API riStatus
 rhioCommandQueueSubmit( riCommandQueue queue, riCommandList commandList )
 {
+    riCommandQueueBase * queueBase = NULL;
+
     RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
     RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( queue->base.vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( queue->base.vtable->submit_command_list, RI_ERROR_INVALID_STATE );
 
-    return queue->base.vtable->submit_command_list( queue, commandList );
+    queueBase = (riCommandQueueBase *)queue;
+
+    RI_GUARD_NULL( queueBase->vtable, RI_ERROR_INVALID_STATE );
+    RI_GUARD_NULL( queueBase->vtable->submit_command_list, RI_ERROR_INVALID_STATE );
+
+    return queueBase->vtable->submit_command_list( queue, commandList );
 }
 
 #    pragma endregion // Command Queues
@@ -1232,9 +1250,54 @@ typedef GLXContext riGL_RenderContext;
 // Internal OpenGL device state
 typedef struct riGL_Device
 {
-    int dummyPlaceholder;
+    riDeviceBase base; // Frontend handle dispatch
 
 } riGL_Device;
+
+typedef struct riGL_CommandList riGL_CommandList;
+
+typedef struct riGL_CommandQueue
+{
+    riCommandQueueBase base;         // Frontend handle dispatch
+    riGL_CommandList * commandLists; // Queue-owned command lists
+
+} riGL_CommandQueue;
+
+struct riGL_CommandList
+{
+    riGL_CommandList * next;  // Next queue-owned command list
+    riCommandQueue     queue; // Owning queue for future GL command-buffer emulation
+
+};
+
+// Device
+static riStatus _rhioGL_init( riDevice device, const riBackendInitInfo * info );
+static void     _rhioGL_shutdown( riDevice device );
+
+// Command queue
+static riStatus _rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue );
+static riStatus _rhioGL_create_command_list( riCommandQueue queue, riCommandList * outCommandList );
+static void     _rhioGL_destroy_command_queue( riCommandQueue queue );
+static riStatus _rhioGL_submit_command_list( riCommandQueue queue, riCommandList commandList );
+
+//----------------------------------------------------------------------------------
+// OpenGL Backend Vtable
+//----------------------------------------------------------------------------------
+#        define BIND_FUNC( name ) .name = _rhioGL_##name
+
+static const riDeviceVTable s_gl_vtable = {
+    BIND_FUNC( init ),
+    BIND_FUNC( shutdown ),
+    BIND_FUNC( create_command_queue ),
+};
+
+static const riCommandQueueVTable s_gl_command_queue_vtable = {
+    BIND_FUNC( create_command_list ),
+    BIND_FUNC( destroy_command_queue ),
+    BIND_FUNC( submit_command_list ),
+};
+
+#        undef BIND_FUNC
 
 //----------------------------------------------------------------------------------
 // OpenGL Backend Implementation                                       [>>GL_IMPL<<]
@@ -1242,14 +1305,14 @@ typedef struct riGL_Device
 
 // Initialize OpenGL state and allocate default resources
 static riStatus
-_rhioGL_init( void * backendDevice, const riBackendInitInfo * info )
+_rhioGL_init( riDevice device, const riBackendInitInfo * info )
 {
     const GLubyte * vendor      = NULL;
     const GLubyte * renderer    = NULL;
     const GLubyte * version     = NULL;
     const GLubyte * glslVersion = NULL;
 
-    RI_GUARD_NULL( backendDevice, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
     RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
 
     UNUSED( info );
@@ -1280,13 +1343,15 @@ _rhioGL_init( void * backendDevice, const riBackendInitInfo * info )
 
 // Free OpenGL resources and tear down device state
 static void
-_rhioGL_shutdown( void * backendDevice )
+_rhioGL_shutdown( riDevice device )
 {
-    riGL_Device emptyDevice = RI_ZERO_INIT;
+    riGL_Device   emptyDevice = RI_ZERO_INIT;
+    riGL_Device * glDevice    = (riGL_Device *)device;
 
-    if( NULL != backendDevice )
+    if( NULL != glDevice )
         {
-            *(riGL_Device *)backendDevice = emptyDevice;
+            emptyDevice.base = glDevice->base; // preserve base struct!
+            *glDevice        = emptyDevice;
         }
 
     TRACELOG( RI_LOG_INFO, "BACKEND GL: Shutdown complete" );
@@ -1294,10 +1359,61 @@ _rhioGL_shutdown( void * backendDevice )
 
 // Initialize an OpenGL command queue wrapper
 static riStatus
-_rhioGL_create_command_queue( void * backendDevice, riCommandQueue queue )
+_rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue )
 {
-    UNUSED( backendDevice );
+    riGL_CommandQueue * glQueue = NULL;
+
+    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+
+    // Queue Allocation
+    //----------------------------------------------------------
+    glQueue = (riGL_CommandQueue *)RI_CALLOC( 1, sizeof( *glQueue ) );
+    if( RI_UNLIKELY( NULL == glQueue ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Queue Dispatch Initialization
+    //----------------------------------------------------------
+    glQueue->base.vtable = &s_gl_command_queue_vtable;
+
+    // Queue Handle Handoff
+    //----------------------------------------------------------
+    *outQueue = (riCommandQueue)glQueue;
+
+    return RI_SUCCESS;
+}
+
+// Initialize an OpenGL command list wrapper
+static riStatus
+_rhioGL_create_command_list( riCommandQueue queue, riCommandList * outCommandList )
+{
+    riGL_CommandQueue * glQueue       = NULL;
+    riGL_CommandList *  glCommandList = NULL;
+
     RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( outCommandList, RI_ERROR_INVALID_PARAM );
+
+    glQueue = (riGL_CommandQueue *)queue;
+
+    // Command List Allocation
+    //----------------------------------------------------------
+    glCommandList = (riGL_CommandList *)RI_CALLOC( 1, sizeof( *glCommandList ) );
+    if( RI_UNLIKELY( NULL == glCommandList ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Command List State Initialization
+    //----------------------------------------------------------
+    glCommandList->queue  = queue;
+    glCommandList->next   = glQueue->commandLists;
+    glQueue->commandLists = glCommandList;
+
+    // Command List Handle Handoff
+    //----------------------------------------------------------
+    *outCommandList = (riCommandList)glCommandList;
 
     return RI_SUCCESS;
 }
@@ -1306,7 +1422,19 @@ _rhioGL_create_command_queue( void * backendDevice, riCommandQueue queue )
 static void
 _rhioGL_destroy_command_queue( riCommandQueue queue )
 {
-    UNUSED( queue );
+    riGL_CommandQueue * glQueue     = (riGL_CommandQueue *)queue;
+    riGL_CommandList *  commandList = NULL;
+
+    RI_GUARD_NULL_VOID( glQueue );
+
+    // Command List Cleanup
+    //----------------------------------------------------------
+    while( NULL != glQueue->commandLists )
+        {
+            commandList           = glQueue->commandLists;
+            glQueue->commandLists = commandList->next;
+            RI_FREE( commandList );
+        }
 }
 
 // Submit one command list to the OpenGL backend
@@ -1318,24 +1446,6 @@ _rhioGL_submit_command_list( riCommandQueue queue, riCommandList commandList )
 
     return RI_SUCCESS;
 }
-
-//----------------------------------------------------------------------------------
-// OpenGL Backend Vtable and Registration
-//----------------------------------------------------------------------------------
-#        define BIND_FUNC( name ) .name = _rhioGL_##name
-
-static const riDeviceVTable s_gl_vtable = {
-    BIND_FUNC( init ),
-    BIND_FUNC( shutdown ),
-    BIND_FUNC( create_command_queue ),
-};
-
-static const riCommandQueueVTable s_gl_command_queue_vtable = {
-    BIND_FUNC( destroy_command_queue ),
-    BIND_FUNC( submit_command_list ),
-};
-
-#        undef BIND_FUNC
 
 // Populate the backend descriptor with OpenGL implementations
 static riStatus
@@ -1364,8 +1474,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     desc->flags      = flags;
 
     // VTable
-    desc->vtable             = s_gl_vtable;
-    desc->commandQueueVTable = s_gl_command_queue_vtable;
+    desc->vtable = &s_gl_vtable;
 
     return RI_SUCCESS;
 }
@@ -1474,7 +1583,11 @@ _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 static riStatus
 _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable )
 {
-    RI_GUARD_NULL( vtable, RI_ERROR_INVALID_PARAM );
+    if( RI_UNLIKELY( vtable == NULL ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Missing dispatch table" );
+            return RI_ERROR_INVALID_STATE;
+        }
 
 #    define CHECK_QUEUE_VTABLE_SLOT( name )                                                                            \
         do                                                                                                             \
@@ -1487,6 +1600,7 @@ _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable )
             }                                                                                                          \
         while( 0 )
 
+    CHECK_QUEUE_VTABLE_SLOT( create_command_list );
     CHECK_QUEUE_VTABLE_SLOT( destroy_command_queue );
     CHECK_QUEUE_VTABLE_SLOT( submit_command_list );
 
@@ -1516,14 +1630,13 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
     //----------------------------------------------------------
     // NOTE: A custom vtable takes precedence over info->backend. Missing required
     // slots are reported by `_rhioValidateDeviceVTable()`.
-    if( info->vtable.init != NULL )
+    if( info->vtable != NULL )
         {
-            desc->name               = "Custom";
-            desc->backend            = RI_BACKEND_CUSTOM;
-            desc->vtable             = info->vtable;
-            desc->commandQueueVTable = info->commandQueueVTable;
-            desc->deviceSize         = info->backendDeviceSize;
-            desc->flags              = info->flags;
+            desc->name       = "Custom";
+            desc->backend    = RI_BACKEND_CUSTOM;
+            desc->vtable     = info->vtable;
+            desc->deviceSize = info->backendDeviceSize;
+            desc->flags      = info->flags;
             return RI_SUCCESS;
         }
 
