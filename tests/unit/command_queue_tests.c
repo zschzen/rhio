@@ -21,6 +21,8 @@ typedef struct CommandQueueObservations
     int queueCreateFailureCalls;
     int queueDestroyCalls;
     int queueSubmitCalls;
+    int queueSubmitInfoCalls;
+    int queueSubmitListCount;
     int commandListCreateCalls;
 
 } CommandQueueObservations;
@@ -36,14 +38,23 @@ typedef struct CommandQueueTestQueue
     riDevice           device; // Owning device
 } CommandQueueTestQueue;
 
+typedef struct CommandQueueTestCommandList
+{
+    riCommandListBase base;  // Must be first for frontend dispatch
+    riCommandQueue    queue; // Owning queue
+} CommandQueueTestCommandList;
+
 static CommandQueueObservations g_commandQueue;
 
 static const riDeviceVTable       s_command_queue_device_vtable;
 static const riDeviceVTable       s_command_queue_missing_queue_vtable;
 static const riDeviceVTable       s_command_queue_missing_command_list_vtable;
 static const riDeviceVTable       s_command_queue_failing_device_vtable;
+static const riDeviceVTable       s_command_queue_multi_submit_device_vtable;
 static const riCommandQueueVTable s_command_queue_vtable;
 static const riCommandQueueVTable s_command_queue_no_command_list_vtable;
+static const riCommandQueueVTable s_command_queue_multi_submit_vtable;
+static const riCommandListVTable  s_command_list_vtable;
 
 static void
 reset_command_queue_observations( void )
@@ -168,6 +179,37 @@ command_queue_create_without_command_list_create( riDevice device, riCommandQueu
 }
 
 static riStatus
+command_queue_create_with_multi_submit( riDevice device, riCommandQueue * outQueue )
+{
+    CommandQueueTestQueue * queue = NULL;
+
+    // Input validation
+    // ----------------------------------------------------------
+    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
+    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+
+    // Backend observation
+    // ----------------------------------------------------------
+    ++g_commandQueue.queueCreateCalls;
+
+    // Queue allocation
+    // ----------------------------------------------------------
+    queue = (CommandQueueTestQueue *)RI_CALLOC( 1, sizeof( *queue ) );
+    if( queue == NULL ) return RI_ERROR_OUT_OF_MEMORY;
+
+    // Queue state initialization
+    // ----------------------------------------------------------
+    queue->base.vtable = &s_command_queue_multi_submit_vtable;
+    queue->device      = device;
+
+    // Queue handle handoff
+    // ----------------------------------------------------------
+    *outQueue = (riCommandQueue)queue;
+
+    return RI_SUCCESS;
+}
+
+static riStatus
 command_queue_create_failure( riDevice device, riCommandQueue * outQueue )
 {
     UNUSED( device );
@@ -186,6 +228,8 @@ command_queue_create_failure( riDevice device, riCommandQueue * outQueue )
 static riStatus
 command_queue_create_command_list( riCommandQueue queue, riCommandList * outCommandList )
 {
+    CommandQueueTestCommandList * commandList = NULL;
+
     // Input validation
     // ----------------------------------------------------------
     RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
@@ -195,12 +239,67 @@ command_queue_create_command_list( riCommandQueue queue, riCommandList * outComm
     // ----------------------------------------------------------
     ++g_commandQueue.commandListCreateCalls;
 
+    // Command list allocation
+    // ----------------------------------------------------------
+    commandList = (CommandQueueTestCommandList *)RI_CALLOC( 1, sizeof( *commandList ) );
+    if( commandList == NULL ) return RI_ERROR_OUT_OF_MEMORY;
+
+    // Command list state initialization
+    // ----------------------------------------------------------
+    commandList->base.vtable = &s_command_list_vtable;
+    commandList->queue       = queue;
+
     // Command list handle handoff
     // ----------------------------------------------------------
-    // This test double only needs an opaque non-null handle to prove dispatch.
-    *outCommandList = (riCommandList)(uintptr_t)2;
+    *outCommandList = (riCommandList)commandList;
 
     return RI_SUCCESS;
+}
+
+static void
+command_list_destroy( riCommandList commandList )
+{
+    CommandQueueTestCommandList * list = (CommandQueueTestCommandList *)commandList;
+
+    if( list != NULL )
+        {
+            list->queue = NULL;
+        }
+}
+
+static riStatus
+command_list_begin( riCommandList commandList )
+{
+    UNUSED( commandList );
+
+    return RI_SUCCESS;
+}
+
+static riStatus
+command_list_end( riCommandList commandList )
+{
+    UNUSED( commandList );
+
+    return RI_SUCCESS;
+}
+
+static riStatus
+command_list_reset( riCommandList commandList )
+{
+    UNUSED( commandList );
+
+    return RI_SUCCESS;
+}
+
+static riStatus
+command_list_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info, riRenderPass * outRenderPass )
+{
+    UNUSED( commandList );
+    UNUSED( info );
+
+    if( outRenderPass != NULL ) *outRenderPass = NULL;
+
+    return RI_ERROR_BACKEND_UNAVAIL;
 }
 
 static void
@@ -218,6 +317,21 @@ command_queue_submit( riCommandQueue queue, riCommandList commandList )
     UNUSED( commandList );
 
     ++g_commandQueue.queueSubmitCalls;
+
+    return RI_SUCCESS;
+}
+
+static riStatus
+command_queue_submit_lists( riCommandQueue queue, const riCommandQueueSubmitInfo * info )
+{
+    UNUSED( queue );
+
+    if( info == NULL ) return RI_ERROR_INVALID_PARAM;
+    if( info->commandLists == NULL ) return RI_ERROR_INVALID_PARAM;
+    if( info->commandListCount == 0u ) return RI_ERROR_INVALID_PARAM;
+
+    ++g_commandQueue.queueSubmitInfoCalls;
+    g_commandQueue.queueSubmitListCount += (int)info->commandListCount;
 
     return RI_SUCCESS;
 }
@@ -246,6 +360,12 @@ static const riDeviceVTable s_command_queue_failing_device_vtable = {
     .create_command_queue = command_queue_create_failure,
 };
 
+static const riDeviceVTable s_command_queue_multi_submit_device_vtable = {
+    .init                 = command_queue_backend_init,
+    .shutdown             = command_queue_backend_shutdown,
+    .create_command_queue = command_queue_create_with_multi_submit,
+};
+
 static const riCommandQueueVTable s_command_queue_vtable = {
     .create_command_list   = command_queue_create_command_list,
     .destroy_command_queue = command_queue_destroy,
@@ -255,6 +375,20 @@ static const riCommandQueueVTable s_command_queue_vtable = {
 static const riCommandQueueVTable s_command_queue_no_command_list_vtable = {
     .destroy_command_queue = command_queue_destroy,
     .submit_command_list   = command_queue_submit,
+};
+
+static const riCommandQueueVTable s_command_queue_multi_submit_vtable = {
+    .create_command_list   = command_queue_create_command_list,
+    .destroy_command_queue = command_queue_destroy,
+    .submit_command_lists  = command_queue_submit_lists,
+};
+
+static const riCommandListVTable s_command_list_vtable = {
+    .destroy_command_list = command_list_destroy,
+    .begin                = command_list_begin,
+    .end                  = command_list_end,
+    .reset                = command_list_reset,
+    .begin_render_pass    = command_list_begin_render_pass,
 };
 
 //----------------------------------------------------------------------------------
@@ -363,11 +497,80 @@ TEST( command_queue, dispatches_custom_queue_vtable )
     EXPECT_EQ( rhioCommandQueueSubmit( queue, commandList ), RI_SUCCESS );
     EXPECT_EQ( g_commandQueue.queueSubmitCalls, 1 );
 
+    rhioDestroyCommandList( commandList );
     rhioDestroyCommandQueue( queue );
     EXPECT_EQ( g_commandQueue.queueDestroyCalls, 1 );
 
     rhioDestroyDevice( device );
     EXPECT_EQ( g_commandQueue.deviceShutdownCalls, 1 );
+}
+
+// Submits multiple command lists through the single-list fallback when a backend
+// has not provided a batched submit entry point yet
+TEST( command_queue, submit_info_falls_back_to_single_list_dispatch )
+{
+    riDevice                 device          = NULL;
+    riCommandQueue           queue           = NULL;
+    riCommandList            commandLists[2] = { NULL, NULL };
+    riCommandQueueSubmitInfo submitInfo      = RI_ZERO_INIT;
+    riDeviceInfo             info            = RI_ZERO_INIT;
+
+    reset_command_queue_observations();
+    riSetTraceLogLevel( RI_LOG_NONE );
+
+    info.vtable            = &s_command_queue_device_vtable;
+    info.backendDeviceSize = sizeof( CommandQueueTestDevice );
+
+    EXPECT_EQ( rhioCreateDevice( &info, &device ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandQueue( device, &queue ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandList( queue, &commandLists[0] ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandList( queue, &commandLists[1] ), RI_SUCCESS );
+
+    submitInfo.commandLists     = commandLists;
+    submitInfo.commandListCount = 2u;
+
+    EXPECT_EQ( rhioCommandQueueSubmitInfo( queue, &submitInfo ), RI_SUCCESS );
+    EXPECT_EQ( g_commandQueue.queueSubmitCalls, 2 );
+    EXPECT_EQ( g_commandQueue.queueSubmitInfoCalls, 0 );
+
+    rhioDestroyCommandList( commandLists[0] );
+    rhioDestroyCommandList( commandLists[1] );
+    rhioDestroyCommandQueue( queue );
+    rhioDestroyDevice( device );
+}
+
+// Uses the batched submit slot when a backend exposes one
+TEST( command_queue, submit_info_uses_batched_dispatch_when_available )
+{
+    riDevice                 device          = NULL;
+    riCommandQueue           queue           = NULL;
+    riCommandList            commandLists[2] = { NULL, NULL };
+    riCommandQueueSubmitInfo submitInfo      = RI_ZERO_INIT;
+    riDeviceInfo             info            = RI_ZERO_INIT;
+
+    reset_command_queue_observations();
+    riSetTraceLogLevel( RI_LOG_NONE );
+
+    info.vtable            = &s_command_queue_multi_submit_device_vtable;
+    info.backendDeviceSize = sizeof( CommandQueueTestDevice );
+
+    EXPECT_EQ( rhioCreateDevice( &info, &device ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandQueue( device, &queue ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandList( queue, &commandLists[0] ), RI_SUCCESS );
+    EXPECT_EQ( rhioCreateCommandList( queue, &commandLists[1] ), RI_SUCCESS );
+
+    submitInfo.commandLists     = commandLists;
+    submitInfo.commandListCount = 2u;
+
+    EXPECT_EQ( rhioCommandQueueSubmitInfo( queue, &submitInfo ), RI_SUCCESS );
+    EXPECT_EQ( g_commandQueue.queueSubmitCalls, 0 );
+    EXPECT_EQ( g_commandQueue.queueSubmitInfoCalls, 1 );
+    EXPECT_EQ( g_commandQueue.queueSubmitListCount, 2 );
+
+    rhioDestroyCommandList( commandLists[0] );
+    rhioDestroyCommandList( commandLists[1] );
+    rhioDestroyCommandQueue( queue );
+    rhioDestroyDevice( device );
 }
 
 // Leaves the output handle null if the backend rejects command queue creation
