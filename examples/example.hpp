@@ -26,6 +26,7 @@ struct ExampleInfo
 extern const ExampleInfo exampleInfo;
 
 bool InitExample();
+void DrawExample();
 void OnFramebufferResize( int width, int height );
 void OnKey( int key, int action );
 void ShutdownExample();
