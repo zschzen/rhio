@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.26..4.3 FATAL_ERROR)
 project(
   rhio
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION "Single-file header-only C99 RHI"
   LANGUAGES C
   HOMEPAGE_URL "https://github.com/zschzen/rhio"

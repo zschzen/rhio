@@ -1,6 +1,6 @@
 /**********************************************************************************************
 *
-*     ▌ ▘   v0.0.1
+*     ▌ ▘   v0.1.0
 *   ▛▘▛▌▌▛▌ Single-file header-only C99 RHI
 *   ▌ ▌▌▌▙▌ zlib/libpng licensed
 *
@@ -109,8 +109,8 @@
 
 // Version
 #define RHIO_VERSION_MAJOR 0
-#define RHIO_VERSION_MINOR 0
-#define RHIO_VERSION_PATCH 2
+#define RHIO_VERSION_MINOR 1
+#define RHIO_VERSION_PATCH 0
 #define RHIO_VERSION       ( ( RHIO_VERSION_MAJOR << 16 ) | ( RHIO_VERSION_MINOR << 8 ) | RHIO_VERSION_PATCH )
 #define RHIO_VERSION_STRING                                                                                            \
     RHIO_STR( RHIO_VERSION_MAJOR ) "." RHIO_STR( RHIO_VERSION_MINOR ) "." RHIO_STR( RHIO_VERSION_PATCH )

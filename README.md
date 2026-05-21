@@ -66,7 +66,7 @@ Simply copy `rhio.h` to your project. Define the implementation in exactly one s
 CPMAddPackage(
   NAME rhio
   GITHUB_REPOSITORY zschzen/rhio
-  GIT_TAG v0.0.1
+  GIT_TAG v0.1.0
 )
 target_link_libraries(my_project PRIVATE rhio::rhio)
 ```
