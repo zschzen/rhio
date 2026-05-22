@@ -622,9 +622,9 @@ typedef struct riRenderPassAttachmentInfo
     riAttachmentLoadAction  loadAction;  // Attachment load behavior
     riAttachmentStoreAction storeAction; // Attachment store behavior
 
-    riColor clearColor;                  // Used for color attachments when loadAction is CLEAR
-    riF32   clearDepth;                  // Used for depth attachments when loadAction is CLEAR
-    riU8    clearStencil;                // Used for stencil attachments when loadAction is CLEAR
+    riF32 clearColor[4];                 // RGBA, used for color attachments
+    riF32 clearDepth;                    // Used for depth attachments
+    riU8  clearStencil;                  // Used for stencil attachments
 
 } riRenderPassAttachmentInfo;
 
@@ -1995,8 +1995,8 @@ typedef struct riGL_ClearCommand
 {
     GLbitfield mask;
 
-    bool    hasColor;
-    riColor color;
+    bool  hasColor;
+    riF32 color[4];
 
     bool  hasDepth;
     riF32 depth;
@@ -2700,7 +2700,10 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
             if( attachment->loadAction == RI_ATTACHMENT_LOAD_ACTION_CLEAR )
                 {
                     clear.hasColor = true;
-                    clear.color    = attachment->clearColor;
+                    clear.color[0] = attachment->clearColor[0];
+                    clear.color[1] = attachment->clearColor[1];
+                    clear.color[2] = attachment->clearColor[2];
+                    clear.color[3] = attachment->clearColor[3];
                     clear.mask |= GL_COLOR_BUFFER_BIT;
                 }
         }
@@ -3292,7 +3295,7 @@ _rhioGL_execute_clear_command( const riGL_ClearCommand * clear )
         {
             glGetBooleanv( GL_COLOR_WRITEMASK, restoreColorMask );
             glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-            glClearColor( clear->color.r, clear->color.g, clear->color.b, clear->color.a );
+            glClearColor( clear->color[0], clear->color[1], clear->color[2], clear->color[3] );
         }
 
     if( clear->hasDepth )

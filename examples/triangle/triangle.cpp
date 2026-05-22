@@ -139,13 +139,16 @@ DrawExample()
     status = rhioCommandListBegin( rhioCommandList );
     if( RI_FAILED( status ) ) goto cleanup;
 
-    passInfo.colorAttachments[0].textureView = displayView;
-    passInfo.colorAttachments[0].loadAction  = RI_ATTACHMENT_LOAD_ACTION_CLEAR;
-    passInfo.colorAttachments[0].storeAction = RI_ATTACHMENT_STORE_ACTION_STORE;
-    passInfo.colorAttachments[0].clearColor  = { 0.16f, 0.16f, 0.16f, 1.0f };
-    passInfo.colorAttachmentCount            = 1u;
-    passInfo.renderWidth                     = (riU32)framebufferWidth;
-    passInfo.renderHeight                    = (riU32)framebufferHeight;
+    passInfo.colorAttachments[0].textureView   = displayView;
+    passInfo.colorAttachments[0].loadAction    = RI_ATTACHMENT_LOAD_ACTION_CLEAR;
+    passInfo.colorAttachments[0].storeAction   = RI_ATTACHMENT_STORE_ACTION_STORE;
+    passInfo.colorAttachments[0].clearColor[0] = 0.16f;
+    passInfo.colorAttachments[0].clearColor[1] = 0.16f;
+    passInfo.colorAttachments[0].clearColor[2] = 0.16f;
+    passInfo.colorAttachments[0].clearColor[3] = 1.0f;
+    passInfo.colorAttachmentCount              = 1u;
+    passInfo.renderWidth                       = (riU32)framebufferWidth;
+    passInfo.renderHeight                      = (riU32)framebufferHeight;
 
     status = rhioCommandListBeginRenderPass( rhioCommandList, &passInfo, &renderPass );
     if( RI_FAILED( status ) ) goto cleanup;
