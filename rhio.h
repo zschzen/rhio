@@ -744,16 +744,16 @@ typedef struct riCommandQueueVTable
 // Base struct definitions
 //----------------------------------------------------------
 DECLARE_RI_BASE( riDevice );
+
+DECLARE_RI_BASE( riCommandQueue );
 DECLARE_RI_BASE( riCommandList );
+
 DECLARE_RI_BASE( riSwapchain );
+
 DECLARE_RI_BASE( riTexture );
 DECLARE_RI_BASE( riTextureView );
-DECLARE_RI_BASE( riRenderPass );
 
-typedef struct riCommandQueueBase
-{
-    const riCommandQueueVTable * vtable;
-} riCommandQueueBase;
+DECLARE_RI_BASE( riRenderPass );
 
 #undef DECLARE_RI_BASE
 
