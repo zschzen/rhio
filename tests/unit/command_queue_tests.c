@@ -90,8 +90,8 @@ command_queue_create( riDevice device, riCommandQueue * outQueue )
 
     // Input validation
     // ----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
 
     // Backend observation
     // ----------------------------------------------------------
@@ -122,8 +122,8 @@ command_queue_create_without_vtable( riDevice device, riCommandQueue * outQueue 
 
     // Input validation
     // ----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
 
     // Backend observation
     // ----------------------------------------------------------
@@ -153,8 +153,8 @@ command_queue_create_without_command_list_create( riDevice device, riCommandQueu
 
     // Input validation
     // ----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
 
     // Backend observation
     // ----------------------------------------------------------
@@ -185,8 +185,8 @@ command_queue_create_with_multi_submit( riDevice device, riCommandQueue * outQue
 
     // Input validation
     // ----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
 
     // Backend observation
     // ----------------------------------------------------------
@@ -232,8 +232,8 @@ command_queue_create_command_list( riCommandQueue queue, riCommandList * outComm
 
     // Input validation
     // ----------------------------------------------------------
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outCommandList != NULL, RI_ERROR_INVALID_PARAM );
 
     // Backend observation
     // ----------------------------------------------------------

@@ -265,21 +265,17 @@
 #endif
 
 // Internal helper macro. Determines if a cond isnt true
-#define _RI_GUARD_CORE( cond, log_msg, ... )                                                                           \
+#define RI_GUARD( cond, retval )                                                                                       \
     do                                                                                                                 \
         {                                                                                                              \
-            if( RI_UNLIKELY( cond ) )                                                                                  \
+            if( !( cond ) )                                                                                            \
                 {                                                                                                      \
-                    TRACELOG( RI_LOG_ERROR, "%s: " log_msg, __func__ );                                                \
-                    __VA_ARGS__;                                                                                       \
+                    return retval;                                                                                     \
                 }                                                                                                      \
         }                                                                                                              \
     while( 0 )
 
-#define RI_GUARD_NULL( ptr, retval ) _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return ( retval ) )
-#define RI_GUARD( cond, retval )     _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return ( retval ) )
-#define RI_GUARD_NULL_VOID( ptr )    _RI_GUARD_CORE( ( ptr ) == NULL, "unexpected NULL argument", return )
-#define RI_GUARD_VOID( cond )        _RI_GUARD_CORE( !( cond ), "guard failed: " #cond, return )
+#define RI_GUARD_VOID( cond ) RI_GUARD( cond, )
 
 #pragma endregion // Defines and Macros
 
@@ -1003,12 +999,12 @@ rhioCreateDevice( const riDeviceInfo * info, riDevice * outDevice )
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outDevice, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outDevice != NULL, RI_ERROR_INVALID_PARAM );
     *outDevice = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
 
     // Resolve Backend Info
     //----------------------------------------------------------
@@ -1105,7 +1101,7 @@ rhioDestroyDevice( riDevice device )
 {
     riDeviceBase * deviceBase = NULL;
 
-    RI_GUARD_NULL_VOID( device );
+    RI_GUARD_VOID( device != NULL );
 
     deviceBase = (riDeviceBase *)device;
 
@@ -1145,18 +1141,18 @@ rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
     *outQueue = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
     deviceBase = (riDeviceBase *)device;
 
     // Device Dispatch Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( deviceBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( deviceBase->vtable->create_command_queue, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable->create_command_queue != NULL, RI_ERROR_INVALID_STATE );
 
     // Backend Queue Creation
     //----------------------------------------------------------
@@ -1170,7 +1166,7 @@ rhioCreateCommandQueue( riDevice device, riCommandQueue * outQueue )
             return status;
         }
 
-    RI_GUARD_NULL( *outQueue, RI_ERROR_INVALID_STATE );
+    RI_GUARD( *outQueue != NULL, RI_ERROR_INVALID_STATE );
 
     // Command Queue Dispatch Validation
     //----------------------------------------------------------
@@ -1223,18 +1219,18 @@ rhioCreateCommandList( riCommandQueue queue, riCommandList * outCommandList )
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outCommandList != NULL, RI_ERROR_INVALID_PARAM );
     *outCommandList = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
     queueBase = (riCommandQueueBase *)queue;
 
     // Queue Dispatch Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( queueBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( queueBase->vtable->create_command_list, RI_ERROR_INVALID_STATE );
+    RI_GUARD( queueBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( queueBase->vtable->create_command_list != NULL, RI_ERROR_INVALID_STATE );
 
     // Backend Command List Creation
     //----------------------------------------------------------
@@ -1248,7 +1244,7 @@ rhioCreateCommandList( riCommandQueue queue, riCommandList * outCommandList )
             return status;
         }
 
-    RI_GUARD_NULL( *outCommandList, RI_ERROR_INVALID_STATE );
+    RI_GUARD( *outCommandList != NULL, RI_ERROR_INVALID_STATE );
 
     // Command List Dispatch Validation
     //----------------------------------------------------------
@@ -1297,12 +1293,12 @@ rhioCommandListBegin( riCommandList commandList )
 {
     riCommandListBase * listBase = NULL;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     listBase = (riCommandListBase *)commandList;
 
-    RI_GUARD_NULL( listBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( listBase->vtable->begin, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable->begin != NULL, RI_ERROR_INVALID_STATE );
 
     return listBase->vtable->begin( commandList );
 }
@@ -1313,12 +1309,12 @@ rhioCommandListEnd( riCommandList commandList )
 {
     riCommandListBase * listBase = NULL;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     listBase = (riCommandListBase *)commandList;
 
-    RI_GUARD_NULL( listBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( listBase->vtable->end, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable->end != NULL, RI_ERROR_INVALID_STATE );
 
     return listBase->vtable->end( commandList );
 }
@@ -1329,12 +1325,12 @@ rhioCommandListReset( riCommandList commandList )
 {
     riCommandListBase * listBase = NULL;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     listBase = (riCommandListBase *)commandList;
 
-    RI_GUARD_NULL( listBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( listBase->vtable->reset, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable->reset != NULL, RI_ERROR_INVALID_STATE );
 
     return listBase->vtable->reset( commandList );
 }
@@ -1349,18 +1345,18 @@ rhioCommandListBeginRenderPass( riCommandList commandList, const riRenderPassInf
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outRenderPass, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     *outRenderPass = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
 
     listBase = (riCommandListBase *)commandList;
 
-    RI_GUARD_NULL( listBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( listBase->vtable->begin_render_pass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( listBase->vtable->begin_render_pass != NULL, RI_ERROR_INVALID_STATE );
 
     // Backend Render Pass Begin
     //----------------------------------------------------------
@@ -1371,7 +1367,7 @@ rhioCommandListBeginRenderPass( riCommandList commandList, const riRenderPassInf
             return status;
         }
 
-    RI_GUARD_NULL( *outRenderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( *outRenderPass != NULL, RI_ERROR_INVALID_STATE );
 
     // Render Pass Dispatch Validation
     //----------------------------------------------------------
@@ -1398,7 +1394,7 @@ rhioCommandQueueSubmit( riCommandQueue queue, riCommandList commandList )
 {
     riCommandQueueSubmitInfo submitInfo = RI_ZERO_INIT;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     submitInfo.commandLists     = &commandList;
     submitInfo.commandListCount = 1u;
@@ -1414,14 +1410,14 @@ rhioCommandQueueSubmitInfo( riCommandQueue queue, const riCommandQueueSubmitInfo
     riU32                i         = 0u;
     riStatus             status    = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info->commandLists, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->commandLists != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->commandListCount > 0u, RI_ERROR_INVALID_PARAM );
 
     queueBase = (riCommandQueueBase *)queue;
 
-    RI_GUARD_NULL( queueBase->vtable, RI_ERROR_INVALID_STATE );
+    RI_GUARD( queueBase->vtable != NULL, RI_ERROR_INVALID_STATE );
 
     // Submit Batch Validation
     //----------------------------------------------------------
@@ -1429,7 +1425,7 @@ rhioCommandQueueSubmitInfo( riCommandQueue queue, const riCommandQueueSubmitInfo
     // partial batch before discovering a bad command list
     for( i = 0u; i < info->commandListCount; ++i )
         {
-            RI_GUARD_NULL( info->commandLists[i], RI_ERROR_INVALID_PARAM );
+            RI_GUARD( info->commandLists[i] != NULL, RI_ERROR_INVALID_PARAM );
         }
 
     if( queueBase->vtable->submit_command_lists != NULL )
@@ -1437,7 +1433,7 @@ rhioCommandQueueSubmitInfo( riCommandQueue queue, const riCommandQueueSubmitInfo
             return queueBase->vtable->submit_command_lists( queue, info );
         }
 
-    RI_GUARD_NULL( queueBase->vtable->submit_command_list, RI_ERROR_INVALID_STATE );
+    RI_GUARD( queueBase->vtable->submit_command_list != NULL, RI_ERROR_INVALID_STATE );
 
     for( i = 0u; i < info->commandListCount; ++i )
         {
@@ -1468,21 +1464,21 @@ rhioCreateSwapchain( riDevice device, riCommandQueue queue, const riSwapchainInf
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outSwapchain, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outSwapchain != NULL, RI_ERROR_INVALID_PARAM );
     *outSwapchain = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
 
     deviceBase = (riDeviceBase *)device;
 
     // Device Dispatch Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( deviceBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( deviceBase->vtable->create_swapchain, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable->create_swapchain != NULL, RI_ERROR_INVALID_STATE );
 
     // Backend Swapchain Creation
     //----------------------------------------------------------
@@ -1493,7 +1489,7 @@ rhioCreateSwapchain( riDevice device, riCommandQueue queue, const riSwapchainInf
             return status;
         }
 
-    RI_GUARD_NULL( *outSwapchain, RI_ERROR_INVALID_STATE );
+    RI_GUARD( *outSwapchain != NULL, RI_ERROR_INVALID_STATE );
 
     // Swapchain Dispatch Validation
     //----------------------------------------------------------
@@ -1542,15 +1538,15 @@ rhioSwapchainGetCurrentTexture( riSwapchain swapchain, riTexture * outTexture )
 {
     riSwapchainBase * swapchainBase = NULL;
 
-    RI_GUARD_NULL( outTexture, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTexture != NULL, RI_ERROR_INVALID_PARAM );
     *outTexture = NULL;
 
-    RI_GUARD_NULL( swapchain, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( swapchain != NULL, RI_ERROR_INVALID_PARAM );
 
     swapchainBase = (riSwapchainBase *)swapchain;
 
-    RI_GUARD_NULL( swapchainBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( swapchainBase->vtable->get_current_texture, RI_ERROR_INVALID_STATE );
+    RI_GUARD( swapchainBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( swapchainBase->vtable->get_current_texture != NULL, RI_ERROR_INVALID_STATE );
 
     return swapchainBase->vtable->get_current_texture( swapchain, outTexture );
 }
@@ -1561,12 +1557,12 @@ rhioSwapchainPresent( riSwapchain swapchain )
 {
     riSwapchainBase * swapchainBase = NULL;
 
-    RI_GUARD_NULL( swapchain, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( swapchain != NULL, RI_ERROR_INVALID_PARAM );
 
     swapchainBase = (riSwapchainBase *)swapchain;
 
-    RI_GUARD_NULL( swapchainBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( swapchainBase->vtable->present, RI_ERROR_INVALID_STATE );
+    RI_GUARD( swapchainBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( swapchainBase->vtable->present != NULL, RI_ERROR_INVALID_STATE );
 
     return swapchainBase->vtable->present( swapchain );
 }
@@ -1581,20 +1577,20 @@ rhioCreateTextureView( riDevice device, const riTextureViewInfo * info, riTextur
 
     // Output Handle Initialization
     //----------------------------------------------------------
-    RI_GUARD_NULL( outTextureView, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTextureView != NULL, RI_ERROR_INVALID_PARAM );
     *outTextureView = NULL;
 
     // Input Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
 
     deviceBase = (riDeviceBase *)device;
 
     // Device Dispatch Validation
     //----------------------------------------------------------
-    RI_GUARD_NULL( deviceBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( deviceBase->vtable->create_texture_view, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable->create_texture_view != NULL, RI_ERROR_INVALID_STATE );
 
     // Backend Texture View Creation
     //----------------------------------------------------------
@@ -1605,7 +1601,7 @@ rhioCreateTextureView( riDevice device, const riTextureViewInfo * info, riTextur
             return status;
         }
 
-    RI_GUARD_NULL( *outTextureView, RI_ERROR_INVALID_STATE );
+    RI_GUARD( *outTextureView != NULL, RI_ERROR_INVALID_STATE );
 
     // Texture View Dispatch Validation
     //----------------------------------------------------------
@@ -1650,12 +1646,12 @@ rhioRenderPassEnd( riRenderPass renderPass )
 {
     riRenderPassBase * passBase = NULL;
 
-    RI_GUARD_NULL( renderPass, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( renderPass != NULL, RI_ERROR_INVALID_PARAM );
 
     passBase = (riRenderPassBase *)renderPass;
 
-    RI_GUARD_NULL( passBase->vtable, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( passBase->vtable->end, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable->end != NULL, RI_ERROR_INVALID_STATE );
 
     return passBase->vtable->end( renderPass );
 }
@@ -2193,8 +2189,8 @@ _rhioGL_init( riDevice device, const riBackendInitInfo * info )
     const GLubyte * version     = NULL;
     const GLubyte * glslVersion = NULL;
 
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
 
     UNUSED( info );
 
@@ -2264,10 +2260,10 @@ _rhioGL_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
     riGL_Swapchain * glSwapchain       = NULL;
     riFlags          validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH;
 
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outSwapchain, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outSwapchain != NULL, RI_ERROR_INVALID_PARAM );
 
     RI_GUARD( info->width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->height > 0u, RI_ERROR_INVALID_PARAM );
@@ -2321,10 +2317,10 @@ _rhioGL_create_texture_view( riDevice device, const riTextureViewInfo * info, ri
     riGL_TextureView * glTextureView = NULL;
     riTextureViewInfo  normalized    = RI_ZERO_INIT;
 
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outTextureView, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info->texture, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTextureView != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->texture != NULL, RI_ERROR_INVALID_PARAM );
 
     // View Normalization
     //----------------------------------------------------------
@@ -2412,8 +2408,8 @@ _rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue )
 {
     riGL_CommandQueue * glQueue = NULL;
 
-    RI_GUARD_NULL( device, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outQueue, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
 
     // Queue Allocation
     //----------------------------------------------------------
@@ -2441,8 +2437,8 @@ _rhioGL_create_command_list( riCommandQueue queue, riCommandList * outCommandLis
     riGL_CommandQueue * glQueue       = NULL;
     riGL_CommandList *  glCommandList = NULL;
 
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outCommandList != NULL, RI_ERROR_INVALID_PARAM );
 
     glQueue = (riGL_CommandQueue *)queue;
 
@@ -2482,7 +2478,7 @@ _rhioGL_destroy_command_queue( riCommandQueue queue )
     riGL_CommandQueue * glQueue     = (riGL_CommandQueue *)queue;
     riGL_CommandList *  commandList = NULL;
 
-    RI_GUARD_NULL_VOID( glQueue );
+    RI_GUARD_VOID( glQueue != NULL );
 
     // Command List Cleanup
     //----------------------------------------------------------
@@ -2505,8 +2501,8 @@ _rhioGL_submit_command_list( riCommandQueue queue, riCommandList commandList )
 {
     riCommandQueueSubmitInfo submitInfo = RI_ZERO_INIT;
 
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     submitInfo.commandLists     = &commandList;
     submitInfo.commandListCount = 1u;
@@ -2522,9 +2518,9 @@ _rhioGL_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     riU32              i             = 0u;
     riStatus           status        = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( queue, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info->commandLists, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->commandLists != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->commandListCount > 0u, RI_ERROR_INVALID_PARAM );
 
     // Submit Validation
@@ -2533,7 +2529,7 @@ _rhioGL_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     // fallback and batched paths from partially submitting malformed batches
     for( i = 0u; i < info->commandListCount; ++i )
         {
-            RI_GUARD_NULL( info->commandLists[i], RI_ERROR_INVALID_PARAM );
+            RI_GUARD( info->commandLists[i] != NULL, RI_ERROR_INVALID_PARAM );
 
             glCommandList = (riGL_CommandList *)info->commandLists[i];
             RI_GUARD( glCommandList->queue == queue, RI_ERROR_INVALID_PARAM );
@@ -2570,7 +2566,7 @@ _rhioGL_destroy_command_list( riCommandList commandList )
     riGL_CommandQueue * glQueue       = NULL;
     riGL_CommandList ** cursor        = NULL;
 
-    RI_GUARD_NULL_VOID( glCommandList );
+    RI_GUARD_VOID( glCommandList != NULL );
 
     // Active Render Pass Cleanup
     //----------------------------------------------------------
@@ -2610,7 +2606,7 @@ _rhioGL_command_list_begin( riCommandList commandList )
 {
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
-    RI_GUARD_NULL( glCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_INITIAL, RI_ERROR_INVALID_STATE );
 
     glCommandList->state = RI_GL_COMMAND_LIST_STATE_RECORDING;
@@ -2624,7 +2620,7 @@ _rhioGL_command_list_end( riCommandList commandList )
 {
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
-    RI_GUARD_NULL( glCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
 
@@ -2639,7 +2635,7 @@ _rhioGL_command_list_reset( riCommandList commandList )
 {
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
-    RI_GUARD_NULL( glCommandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
     RI_GUARD( glCommandList->state != RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( glCommandList->state != RI_GL_COMMAND_LIST_STATE_PENDING, RI_ERROR_INVALID_STATE );
@@ -2662,9 +2658,9 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     riU32                              i             = 0;
     riStatus                           status        = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( glCommandList, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outRenderPass, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outRenderPass != NULL, RI_ERROR_INVALID_PARAM );
 
     RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
@@ -2690,7 +2686,7 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     for( i = 0u; i < info->colorAttachmentCount; ++i )
         {
             attachment = &info->colorAttachments[i];
-            RI_GUARD_NULL( attachment->textureView, RI_ERROR_INVALID_PARAM );
+            RI_GUARD( attachment->textureView != NULL, RI_ERROR_INVALID_PARAM );
 
             glTextureView = (riGL_TextureView *)attachment->textureView;
             RI_GUARD( glTextureView->isDefaultFramebuffer, RI_ERROR_BACKEND_UNAVAIL );
@@ -2713,7 +2709,7 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     if( info->hasDepthStencilAttachment )
         {
             attachment = &info->depthStencilAttachment;
-            RI_GUARD_NULL( attachment->textureView, RI_ERROR_INVALID_PARAM );
+            RI_GUARD( attachment->textureView != NULL, RI_ERROR_INVALID_PARAM );
 
             glTextureView = (riGL_TextureView *)attachment->textureView;
             RI_GUARD( glTextureView->isDefaultFramebuffer, RI_ERROR_BACKEND_UNAVAIL );
@@ -2783,8 +2779,8 @@ _rhioGL_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
 {
     riGL_Swapchain * glSwapchain = (riGL_Swapchain *)swapchain;
 
-    RI_GUARD_NULL( glSwapchain, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outTexture, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glSwapchain != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTexture != NULL, RI_ERROR_INVALID_PARAM );
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
 
@@ -2801,7 +2797,7 @@ _rhioGL_present( riSwapchain swapchain )
     riGL_Swapchain * glSwapchain = (riGL_Swapchain *)swapchain;
     riStatus         status      = RI_SUCCESS;
 
-    RI_GUARD_NULL( glSwapchain, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glSwapchain != NULL, RI_ERROR_INVALID_PARAM );
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
 
@@ -2886,9 +2882,9 @@ _rhioGL_render_pass_end( riRenderPass renderPass )
 {
     riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
 
-    RI_GUARD_NULL( glRenderPass, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD_NULL( glRenderPass->commandList, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
     RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
 
     glRenderPass->commandList->activeRenderPass = NULL;
@@ -2976,7 +2972,7 @@ _rhioGL_command_allocator_obtain_block( riGL_CommandAllocator * allocator, riSiz
     riGL_CommandBlock *  block    = NULL;
     riSize               capacity = 0u;
 
-    RI_GUARD_NULL( allocator, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( allocator != NULL, RI_ERROR_INVALID_PARAM );
 
     // Required Capacity Selection
     //----------------------------------------------------------
@@ -3114,8 +3110,8 @@ _rhioGL_command_allocator_write( riGL_CommandAllocator * allocator, riGL_Command
     riSize               alignedRecordSize = 0u;
     riStatus             status            = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( allocator, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( outHeader, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( allocator != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outHeader != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( recordSize >= (riSize)sizeof( riGL_CommandHeader ), RI_ERROR_INVALID_PARAM );
 
     // Record Size Normalization
@@ -3178,8 +3174,8 @@ _rhioGL_append_clear_command( riGL_CommandList * commandList, const riGL_ClearCo
     riGL_ClearCommandRecord * record = NULL;
     riStatus                  status = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( clear, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( clear != NULL, RI_ERROR_INVALID_PARAM );
 
     // Command Record Allocation
     //----------------------------------------------------------
@@ -3211,7 +3207,7 @@ _rhioGL_execute_command_list( riGL_CommandList * commandList )
     riSize                          expectedSize = 0u;
     riStatus                        status       = RI_ERROR_UNKNOWN;
 
-    RI_GUARD_NULL( commandList, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
 
     // Command Stream Decode
     //----------------------------------------------------------
@@ -3375,7 +3371,7 @@ _rhioGL_registerBackend( riBackendDesc * desc )
     riBackend backend = RI_BACKEND_OPENGL;
     riFlags   flags   = 0;
 
-    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( desc != NULL, RI_ERROR_INVALID_PARAM );
 
     // Preserve Requested Flavor
     //----------------------------------------------------------
@@ -3433,7 +3429,7 @@ _rhioVK_registerBackend( riBackendDesc * desc )
 {
     riFlags flags = 0;
 
-    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( desc != NULL, RI_ERROR_INVALID_PARAM );
 
     flags = desc->flags;
 
@@ -3472,34 +3468,20 @@ _rhioBackendDescInit( riBackendDesc * desc )
         }
 }
 
+#    pragma region "Validate VTable"
+
+// Shorthand for vtable member guard
+#    define RI_GUARD_VTABLE( slot ) RI_GUARD( vtable->slot != NULL, RI_ERROR_INVALID_STATE )
+
 // Ensure backend exposes callbacks required by the device API
 static riStatus
 _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 {
-    RI_GUARD_NULL( vtable, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-    // Required backend callbacks
-    //----------------------------------------------------------
-    // NOTE: Public API calls dispatch through these slots after device creation.
-#    define CHECK_VTABLE_SLOT( name )                                                                                  \
-        do                                                                                                             \
-            {                                                                                                          \
-                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
-                    {                                                                                                  \
-                        TRACELOG( RI_LOG_ERROR, "BACKEND: Missing required vtable slot '%s'", #name );                 \
-                        return RI_ERROR_INVALID_STATE;                                                                 \
-                    }                                                                                                  \
-            }                                                                                                          \
-        while( 0 )
-
-    CHECK_VTABLE_SLOT( init );
-    CHECK_VTABLE_SLOT( shutdown );
-    CHECK_VTABLE_SLOT( create_command_queue );
-
-#    undef CHECK_VTABLE_SLOT
-
-    // TODO: Validate required resource dispatch slots here when buffers,
-    // textures, samplers, shaders, render passes, and command lists are added.
+    RI_GUARD_VTABLE( init );
+    RI_GUARD_VTABLE( shutdown );
+    RI_GUARD_VTABLE( create_command_queue );
 
     return RI_SUCCESS;
 }
@@ -3508,37 +3490,20 @@ _rhioValidateDeviceVTable( const riDeviceVTable * vtable )
 static riStatus
 _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable )
 {
-    if( RI_UNLIKELY( vtable == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Missing dispatch table" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-#    define CHECK_QUEUE_VTABLE_SLOT( name )                                                                            \
-        do                                                                                                             \
-            {                                                                                                          \
-                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
-                    {                                                                                                  \
-                        TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Missing required vtable slot '%s'", #name );           \
-                        return RI_ERROR_INVALID_STATE;                                                                 \
-                    }                                                                                                  \
-            }                                                                                                          \
-        while( 0 )
-
-    CHECK_QUEUE_VTABLE_SLOT( create_command_list );
-    CHECK_QUEUE_VTABLE_SLOT( destroy_command_queue );
+    RI_GUARD_VTABLE( create_command_list );
+    RI_GUARD_VTABLE( destroy_command_queue );
 
     // Submit Dispatch Validation
     //----------------------------------------------------------
-    // NOTE: The batched slot is optional; minimal/custom backends may expose only
+    // NOTE: The batched slot is optional. minimal/custom backends may expose only
     // single-list submit and let the frontend fan out rhioCommandQueueSubmitInfo()
     if( RI_UNLIKELY( vtable->submit_command_list == NULL && vtable->submit_command_lists == NULL ) )
         {
             TRACELOG( RI_LOG_ERROR, "COMMAND_QUEUE: Missing required submit vtable slot" );
             return RI_ERROR_INVALID_STATE;
         }
-
-#    undef CHECK_QUEUE_VTABLE_SLOT
 
     return RI_SUCCESS;
 }
@@ -3547,30 +3512,13 @@ _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable )
 static riStatus
 _rhioValidateCommandListVTable( const riCommandListVTable * vtable )
 {
-    if( RI_UNLIKELY( vtable == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "COMMAND_LIST: Missing dispatch table" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-#    define CHECK_LIST_VTABLE_SLOT( name )                                                                             \
-        do                                                                                                             \
-            {                                                                                                          \
-                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
-                    {                                                                                                  \
-                        TRACELOG( RI_LOG_ERROR, "COMMAND_LIST: Missing required vtable slot '%s'", #name );            \
-                        return RI_ERROR_INVALID_STATE;                                                                 \
-                    }                                                                                                  \
-            }                                                                                                          \
-        while( 0 )
-
-    CHECK_LIST_VTABLE_SLOT( destroy_command_list );
-    CHECK_LIST_VTABLE_SLOT( begin );
-    CHECK_LIST_VTABLE_SLOT( end );
-    CHECK_LIST_VTABLE_SLOT( reset );
-    CHECK_LIST_VTABLE_SLOT( begin_render_pass );
-
-#    undef CHECK_LIST_VTABLE_SLOT
+    RI_GUARD_VTABLE( destroy_command_list );
+    RI_GUARD_VTABLE( begin );
+    RI_GUARD_VTABLE( end );
+    RI_GUARD_VTABLE( reset );
+    RI_GUARD_VTABLE( begin_render_pass );
 
     return RI_SUCCESS;
 }
@@ -3579,28 +3527,11 @@ _rhioValidateCommandListVTable( const riCommandListVTable * vtable )
 static riStatus
 _rhioValidateSwapchainVTable( const riSwapchainVTable * vtable )
 {
-    if( RI_UNLIKELY( vtable == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "SWAPCHAIN: Missing dispatch table" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-#    define CHECK_SWAPCHAIN_VTABLE_SLOT( name )                                                                        \
-        do                                                                                                             \
-            {                                                                                                          \
-                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
-                    {                                                                                                  \
-                        TRACELOG( RI_LOG_ERROR, "SWAPCHAIN: Missing required vtable slot '%s'", #name );               \
-                        return RI_ERROR_INVALID_STATE;                                                                 \
-                    }                                                                                                  \
-            }                                                                                                          \
-        while( 0 )
-
-    CHECK_SWAPCHAIN_VTABLE_SLOT( destroy_swapchain );
-    CHECK_SWAPCHAIN_VTABLE_SLOT( get_current_texture );
-    CHECK_SWAPCHAIN_VTABLE_SLOT( present );
-
-#    undef CHECK_SWAPCHAIN_VTABLE_SLOT
+    RI_GUARD_VTABLE( destroy_swapchain );
+    RI_GUARD_VTABLE( get_current_texture );
+    RI_GUARD_VTABLE( present );
 
     return RI_SUCCESS;
 }
@@ -3609,27 +3540,10 @@ _rhioValidateSwapchainVTable( const riSwapchainVTable * vtable )
 static riStatus
 _rhioValidateTextureViewVTable( const riTextureViewVTable * vtable )
 {
-    if( RI_UNLIKELY( vtable == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "TEXTURE_VIEW: Missing dispatch table" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-#    define CHECK_TEXTURE_VIEW_VTABLE_SLOT( name )                                                                     \
-        do                                                                                                             \
-            {                                                                                                          \
-                if( RI_UNLIKELY( vtable->name == NULL ) )                                                              \
-                    {                                                                                                  \
-                        TRACELOG( RI_LOG_ERROR, "TEXTURE_VIEW: Missing required vtable slot '%s'", #name );            \
-                        return RI_ERROR_INVALID_STATE;                                                                 \
-                    }                                                                                                  \
-            }                                                                                                          \
-        while( 0 )
-
-    CHECK_TEXTURE_VIEW_VTABLE_SLOT( destroy_texture_view );
-    CHECK_TEXTURE_VIEW_VTABLE_SLOT( get_texture_view_info );
-
-#    undef CHECK_TEXTURE_VIEW_VTABLE_SLOT
+    RI_GUARD_VTABLE( destroy_texture_view );
+    RI_GUARD_VTABLE( get_texture_view_info );
 
     return RI_SUCCESS;
 }
@@ -3638,20 +3552,16 @@ _rhioValidateTextureViewVTable( const riTextureViewVTable * vtable )
 static riStatus
 _rhioValidateRenderPassVTable( const riRenderPassVTable * vtable )
 {
-    if( RI_UNLIKELY( vtable == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "RENDER_PASS: Missing dispatch table" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
 
-    if( RI_UNLIKELY( vtable->end == NULL ) )
-        {
-            TRACELOG( RI_LOG_ERROR, "RENDER_PASS: Missing required vtable slot 'end'" );
-            return RI_ERROR_INVALID_STATE;
-        }
+    RI_GUARD_VTABLE( end );
 
     return RI_SUCCESS;
 }
+
+#    undef RI_GUARD_VTABLE
+
+#    pragma endregion // Validate VTable
 
 // Convert device creation info into a concrete backend descriptor
 static riStatus
@@ -3659,8 +3569,8 @@ _rhioResolveBackendDesc( const riDeviceInfo * info, riBackendDesc * desc )
 {
     const riFlags validFlags = (riFlags)RI_DEVICE_FLAG_DEBUG;
 
-    RI_GUARD_NULL( info, RI_ERROR_INVALID_PARAM );
-    RI_GUARD_NULL( desc, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( desc != NULL, RI_ERROR_INVALID_PARAM );
 
     _rhioBackendDescInit( desc );
 
