@@ -240,14 +240,18 @@
 
 // Determine if a `riStatus` return value is succeeded or not
 // NOTE: RI_SUCCESS and non-error statuses are non-negative
-#define RI_SUCCEEDED( result ) ( ( result ) >= RI_SUCCESS )
-#define RI_FAILED( result )    ( RI_UNLIKELY( !RI_SUCCEEDED( result ) ) )
+#define RI_SUCCEEDED( result )      ( ( result ) >= RI_SUCCESS )
+#define RI_FAILED( result )         ( !RI_SUCCEEDED( result ) )
+
+// Determine if a `riStatus` return value failed on an expected-success path
+// NOTE: Branch prediction hint applied
+#define RI_SHOULD_SUCCEED( result ) RI_UNLIKELY( RI_FAILED( result ) )
 
 // Flags operations
-#define RI_FLAG_SET( n, f )    ( ( n ) |= ( f ) )
-#define RI_FLAG_CLEAR( n, f )  ( ( n ) &= ~( f ) )
-#define RI_FLAG_TOGGLE( n, f ) ( ( n ) ^= ( f ) )
-#define RI_FLAG_CHECK( n, f )  ( ( n ) & ( f ) )
+#define RI_FLAG_SET( n, f )         ( ( n ) |= ( f ) )
+#define RI_FLAG_CLEAR( n, f )       ( ( n ) &= ~( f ) )
+#define RI_FLAG_TOGGLE( n, f )      ( ( n ) ^= ( f ) )
+#define RI_FLAG_CHECK( n, f )       ( ( n ) & ( f ) )
 
 // Silence compiler for non used
 #ifndef UNUSED
