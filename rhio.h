@@ -300,6 +300,7 @@ typedef enum
     RI_LOG_ERROR,   // Unrecoverable failures
     RI_LOG_FATAL,   // Abort execution with EXIT_FAILURE
     RI_LOG_NONE     // Disable logging system
+
 } riTraceLogLevel;
 
 // Selects the rendering backend at context-creation time
@@ -415,11 +416,11 @@ typedef enum
 typedef enum
 {
     RI_TEXTURE_DIMENSIONS_UNDEFINED = 0,
-    RI_TEXTURE_DIMENSIONS_1D,
-    RI_TEXTURE_DIMENSIONS_2D,
-    RI_TEXTURE_DIMENSIONS_2D_ARRAY,
-    RI_TEXTURE_DIMENSIONS_3D,
-    RI_TEXTURE_DIMENSIONS_CUBE,
+    RI_TEXTURE_DIMENSIONS_1D,       // Texture1D
+    RI_TEXTURE_DIMENSIONS_2D,       //Texture2D
+    RI_TEXTURE_DIMENSIONS_2D_ARRAY, //Texture2DArray
+    RI_TEXTURE_DIMENSIONS_3D,       //Texture3D
+    RI_TEXTURE_DIMENSIONS_CUBE,     // TextureCube
 
 } riTextureDimensions;
 
@@ -1934,14 +1935,16 @@ typedef struct riGL_Device
 
 } riGL_Device;
 
+// Internal OpenGL texture state
 typedef struct riGL_Texture
 {
-    riTextureBase base; // Frontend handle dispatch
-    riTextureInfo info; // Normalized metadata
-    bool          isDefaultFramebuffer;
+    riTextureBase base;                 // Frontend handle dispatch
+    riTextureInfo info;                 // Normalized metadata
+    bool          isDefaultFramebuffer; // Texture represents the backbuffer
 
 } riGL_Texture;
 
+// Internal OpenGL texture view state
 typedef struct riGL_TextureView
 {
     riTextureViewBase base;                 // Frontend handle dispatch
@@ -1951,14 +1954,16 @@ typedef struct riGL_TextureView
 
 } riGL_TextureView;
 
+// Internal OpenGL swapchain state lifecycle
 typedef enum riGL_SwapchainState
 {
-    RI_GL_SWAPCHAIN_STATE_IDLE = 0,
-    RI_GL_SWAPCHAIN_STATE_ACQUIRED,
-    RI_GL_SWAPCHAIN_STATE_LOST,
+    RI_GL_SWAPCHAIN_STATE_IDLE = 0, // Swapchain is ready for use
+    RI_GL_SWAPCHAIN_STATE_ACQUIRED, // Backbuffer has been acquired
+    RI_GL_SWAPCHAIN_STATE_LOST,     // Swapchain needs recreation
 
 } riGL_SwapchainState;
 
+// Internal OpenGL swapchain implementation
 typedef struct riGL_Swapchain
 {
     riSwapchainBase     base;           // Frontend handle dispatch
@@ -1968,64 +1973,75 @@ typedef struct riGL_Swapchain
 
 } riGL_Swapchain;
 
+// Internal OpenGL command list recording and submission state
 typedef enum riGL_CommandListState
 {
-    RI_GL_COMMAND_LIST_STATE_INITIAL = 0,
-    RI_GL_COMMAND_LIST_STATE_RECORDING,
-    RI_GL_COMMAND_LIST_STATE_EXECUTABLE,
-    RI_GL_COMMAND_LIST_STATE_PENDING,
-    RI_GL_COMMAND_LIST_STATE_SUBMITTED,
+    RI_GL_COMMAND_LIST_STATE_INITIAL = 0, // Command list is ready for recording
+    RI_GL_COMMAND_LIST_STATE_RECORDING,   // Command list is currently recording commands
+    RI_GL_COMMAND_LIST_STATE_EXECUTABLE,  // Command list has finished recording and is ready for submission
+    RI_GL_COMMAND_LIST_STATE_PENDING,     // Command list has been submitted and is awaiting execution
+    RI_GL_COMMAND_LIST_STATE_SUBMITTED,   // Command list has been successfully executed
 
 } riGL_CommandListState;
 
+// Internal OpenGL command identifiers
 typedef enum riGL_CommandType
 {
-    RI_GL_COMMAND_CLEAR_FRAMEBUFFER = 0,
+    RI_GL_COMMAND_CLEAR_FRAMEBUFFER = 0, // Command to clear the current framebuffer
 
 } riGL_CommandType;
 
+// Common header for all OpenGL command records
 typedef struct riGL_CommandHeader
 {
-    riU32 type; // riGL_CommandType
+    riU32 type; // riGL_CommandType identifier
     riU32 size; // Aligned command record size in bytes
 
 } riGL_CommandHeader;
 
+// Clear command parameters
 typedef struct riGL_ClearCommand
 {
-    GLbitfield mask;
+    GLbitfield mask; // OpenGL clear mask (GL_COLOR_BUFFER_BIT, etc.)
 
-    bool  hasColor;
-    riF32 color[4];
+    // Color
+    bool  hasColor; // Whether to clear the color buffer
+    riF32 color[4]; // Clear color values (RGBA)
 
-    bool  hasDepth;
-    riF32 depth;
+    // Depth
+    bool  hasDepth; // Whether to clear the depth buffer
+    riF32 depth;    // Clear depth value
 
-    bool hasStencil;
-    riU8 stencil;
+    // Stencil
+    bool hasStencil; // Whether to clear the stencil buffer
+    riU8 stencil;    // Clear stencil value
 
-    bool    useScissor;
-    GLint   scissorX;
-    GLint   scissorY;
-    GLsizei scissorWidth;
-    GLsizei scissorHeight;
+    // Scissor
+    bool    useScissor;    // Whether to apply a scissor rect during clear
+    GLint   scissorX;      // Scissor rectangle X coordinate
+    GLint   scissorY;      // Scissor rectangle Y coordinate
+    GLsizei scissorWidth;  // Scissor rectangle width
+    GLsizei scissorHeight; // Scissor rectangle height
 
 } riGL_ClearCommand;
 
+// Full record for a clear command in the command buffer
 typedef struct riGL_ClearCommandRecord
 {
-    riGL_CommandHeader header;
-    riGL_ClearCommand  clear;
+    riGL_CommandHeader header; // Command header
+    riGL_ClearCommand  clear;  // Clear parameters
 
 } riGL_ClearCommandRecord;
 
+// Aligned raw data storage for command blocks
 typedef union riGL_CommandBlockData
 {
-    riUPtr alignment;
-    riU8   bytes[1];
+    riUPtr alignment; // Ensures block data is pointer-aligned
+    riU8   bytes[1];  // Flexible array member for command storage
 
 } riGL_CommandBlockData;
 
+// A block of linear memory for storing encoded commands
 typedef struct riGL_CommandBlock
 {
     struct riGL_CommandBlock * next;     // Next active or recycled block
@@ -2035,6 +2051,7 @@ typedef struct riGL_CommandBlock
 
 } riGL_CommandBlock;
 
+// Memory manager for OpenGL command recording
 typedef struct riGL_CommandAllocator
 {
     riGL_CommandBlock * firstBlock;   // First active block in execution order
@@ -2043,17 +2060,18 @@ typedef struct riGL_CommandAllocator
     riGL_CommandBlock * freeBlocks;   // Recycled blocks kept for the next reset
     riSize              blockSize;    // Default block allocation size
 #        if defined( RHIO_DEBUG )
-    riU32  activeBlockCount;
-    riU32  freeBlockCount;
-    riU32  commandCount;
-    riSize bytesUsed;
-    riSize peakBytesUsed;
+    riU32  activeBlockCount;          // Number of blocks currently in use
+    riU32  freeBlockCount;            // Number of blocks in the free list
+    riU32  commandCount;              // Total number of commands recorded
+    riSize bytesUsed;                 // Current memory consumption in bytes
+    riSize peakBytesUsed;             // Maximum memory consumption recorded
 #        endif
 
 } riGL_CommandAllocator;
 
 typedef struct riGL_CommandList riGL_CommandList;
 
+// Command queue implementation
 typedef struct riGL_CommandQueue
 {
     riCommandQueueBase base;         // Frontend handle dispatch
@@ -2061,6 +2079,7 @@ typedef struct riGL_CommandQueue
 
 } riGL_CommandQueue;
 
+// Command list implementation
 struct riGL_CommandList
 {
     riCommandListBase     base;             // Frontend handle dispatch
@@ -2071,6 +2090,7 @@ struct riGL_CommandList
     riRenderPass          activeRenderPass; // Currently open pass, if any
 };
 
+// Render pass state
 typedef struct riGL_RenderPass
 {
     riRenderPassBase   base;        // Frontend handle dispatch
