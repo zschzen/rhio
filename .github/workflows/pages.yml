@@ -1,0 +1,150 @@
+# ============================================================================
+# rhio - GitHub Pages Deploy
+# ============================================================================
+# Builds every example under Emscripten, stages artifacts into the `www`
+# branch checkout, minifies HTML/CSS/JS, and deploys to GitHub Pages.
+# ============================================================================
+
+name: Pages
+
+# --------------------------------------------------------------------
+# Triggers
+# --------------------------------------------------------------------
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, www ]
+
+# --------------------------------------------------------------------
+# Permissions
+# --------------------------------------------------------------------
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# --------------------------------------------------------------------
+# Concurrency
+# --------------------------------------------------------------------
+# GitHub Pages accepts a single active deploy per repo; drop queued runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+# --------------------------------------------------------------------
+# Shared Environment
+# --------------------------------------------------------------------
+env:
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+  EMSDK_VERSION: 6.0.3
+
+# --------------------------------------------------------------------
+# Jobs
+# --------------------------------------------------------------------
+jobs:
+  build:
+    name: Build & Deploy Pages
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      # --------------------------------------------------------------
+      # Checkout (library sources on main, site sources on www)
+      # --------------------------------------------------------------
+      - name: Checkout rhio (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: rhio
+
+      - name: Checkout site (www)
+        uses: actions/checkout@v4
+        with:
+          ref: www
+          path: site
+
+      # --------------------------------------------------------------
+      # Toolchain
+      # --------------------------------------------------------------
+      - name: Setup Emscripten
+        uses: emscripten-core/setup-emsdk@main
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      # --------------------------------------------------------------
+      # Caches
+      # --------------------------------------------------------------
+      - name: Cache CPM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-emscripten-cpm-${{ hashFiles('rhio/package-lock.cmake', 'rhio/**/CMakeLists.txt', 'rhio/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-emscripten-cpm-
+            ${{ runner.os }}-cpm-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-emscripten-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-emscripten-ccache-
+
+      # --------------------------------------------------------------
+      # Configure & Build (Emscripten)
+      # --------------------------------------------------------------
+      - name: Configure examples for Web
+        working-directory: rhio
+        run: |
+          emcmake cmake -S . -B build-wasm \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCPM_SOURCE_CACHE="${CPM_SOURCE_CACHE}" \
+            -DRHIO_BUILD_TESTS=OFF \
+            -DRHIO_BUILD_EXAMPLES=ON \
+            -DRHIO_BACKEND_OPENGL=ON \
+            -DRHIO_BACKEND_VULKAN=OFF \
+            -DRHIO_EXAMPLE_GRAPHICS_API=OpenGL \
+            -DRHIO_EXAMPLE_SITE_BUNDLE=ON
+
+      - name: Build examples
+        working-directory: rhio
+        run: cmake --build build-wasm --parallel --target rhio_site_examples
+
+      # --------------------------------------------------------------
+      # Stage into site tree
+      # --------------------------------------------------------------
+      - name: Stage examples into site
+        run: |
+          mkdir -p site/examples
+          cp -R rhio/build-wasm/site/examples/. site/examples/
+          ls -la site/examples/bin site/examples/src
+
+      # --------------------------------------------------------------
+      # Minify (skip Emscripten loaders + pre-minified vendor)
+      # --------------------------------------------------------------
+      - name: Minify site
+        uses: devatherock/minify-js@3.1.0
+        with:
+          directory: site
+          add_suffix: false
+          exclusions: |
+            .*/examples/bin/.*
+            .*/vendor/.*
+            .*\.min\.(js|css)$
+
+      # --------------------------------------------------------------
+      # Deploy
+      # --------------------------------------------------------------
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
