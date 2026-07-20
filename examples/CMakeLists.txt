@@ -36,6 +36,8 @@ endif()
 set(RHIO_EXAMPLE_GRAPHICS_API "${RHIO_EXAMPLE_DEFAULT_GRAPHICS_API}" CACHE STRING "Select the graphics API used by examples.")
 set_property(CACHE RHIO_EXAMPLE_GRAPHICS_API PROPERTY STRINGS OpenGL Vulkan)
 
+option(RHIO_EXAMPLE_SITE_BUNDLE "Emscripten only: emit JS+WASM (no HTML shell) and stage into build/site for the Pages deploy." OFF)
+
 if(NOT RHIO_EXAMPLE_GRAPHICS_API MATCHES "^(OpenGL|Vulkan)$")
   message(FATAL_ERROR "RHIO_EXAMPLE_GRAPHICS_API must be OpenGL or Vulkan.")
 endif()
@@ -183,7 +185,6 @@ foreach(SOURCE_FILE IN LISTS RHIO_EXAMPLE_SOURCE_FILES)
     target_link_options(
       ${EXECUTABLE_NAME}
       PRIVATE
-        --emrun
         "SHELL:-s USE_GLFW=3"
         "SHELL:-s ASSERTIONS=1"
         "SHELL:-s WASM=1"
@@ -194,7 +195,35 @@ foreach(SOURCE_FILE IN LISTS RHIO_EXAMPLE_SOURCE_FILES)
         "SHELL:-s MAX_WEBGL_VERSION=${RHIO_WEBGL_VERSION}"
         $<$<CONFIG:Release>:-O3>
     )
-    set_target_properties(${EXECUTABLE_NAME} PROPERTIES SUFFIX ".html")
+
+    if(RHIO_EXAMPLE_SITE_BUNDLE)
+      # Site mode: JS+WASM loader only, staged into the Pages tree
+      set_target_properties(${EXECUTABLE_NAME} PROPERTIES SUFFIX ".js")
+
+      set(_site_bin_dir "${CMAKE_BINARY_DIR}/site/examples/bin")
+      set(_site_src_dir "${CMAKE_BINARY_DIR}/site/examples/src")
+
+      add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_site_bin_dir}" "${_site_src_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/${EXECUTABLE_NAME}.js"
+          "${_site_bin_dir}/${EXECUTABLE_NAME}.js"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/${EXECUTABLE_NAME}.wasm"
+          "${_site_bin_dir}/${EXECUTABLE_NAME}.wasm"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${SOURCE_FILE}"
+          "${_site_src_dir}/${EXECUTABLE_NAME}.cpp"
+        COMMENT "Staging ${EXECUTABLE_NAME} into site bundle"
+        VERBATIM
+      )
+
+      list(APPEND RHIO_SITE_EXAMPLE_TARGETS ${EXECUTABLE_NAME})
+    else()
+      # Standalone example mode: full HTML shell + emrun harness
+      target_link_options(${EXECUTABLE_NAME} PRIVATE --emrun)
+      set_target_properties(${EXECUTABLE_NAME} PROPERTIES SUFFIX ".html")
+    endif()
   endif()
 
   # --------------------------------------------------------------------
@@ -206,3 +235,13 @@ foreach(SOURCE_FILE IN LISTS RHIO_EXAMPLE_SOURCE_FILES)
 
   GroupSourcesByFolder(${EXECUTABLE_NAME})
 endforeach()
+
+# --------------------------------------------------------------------
+# Pages Site Aggregate Target
+# --------------------------------------------------------------------
+if(EMSCRIPTEN AND RHIO_SITE_EXAMPLE_TARGETS)
+  add_custom_target(rhio_site_examples
+    DEPENDS ${RHIO_SITE_EXAMPLE_TARGETS}
+    COMMENT "Building all rhio examples for the Pages site"
+  )
+endif()
