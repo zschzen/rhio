@@ -128,7 +128,7 @@ jobs:
       # Minify (skip Emscripten loaders + pre-minified vendor)
       # --------------------------------------------------------------
       - name: Minify site
-        uses: devatherock/minify-js@3.1.0
+        uses: devatherock/minify-js@v3.1.0
         with:
           directory: site
           add_suffix: false
