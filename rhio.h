@@ -57,8 +57,9 @@
 *           Optional allocator overrides. Defaults to <stdlib.h>
 *
 *   DEPENDENCIES:
-*       - C99 standard library only (<stdarg.h>, <stdint.h>, <stdlib.h>, <stdio.h>).
-*       - TODO: Add platform-specific headers are pulled in conditionally inside the implementation.
+*       - C99 standard library (<stdarg.h>, <stdint.h>, <stdlib.h>, <stdio.h>).
+*       - Desktop OpenGL builds require GLEW; the CMake target wires glew-cmake automatically.
+*       - Platform GL/GLES/Vulkan SDK headers are pulled in conditionally inside the implementation.
 *
 *
 *   LICENSE: zlib/libpng
@@ -118,6 +119,10 @@
 // Compile-time resource limits
 #ifndef RHIO_MAX_COLOR_ATTACHMENTS
 #    define RHIO_MAX_COLOR_ATTACHMENTS 8
+#endif
+
+#ifndef RHIO_MAX_SHADER_BUFFER_BINDINGS
+#    define RHIO_MAX_SHADER_BUFFER_BINDINGS 8
 #endif
 
 #ifndef RHIO_TEXTURE_VIEW_ALL_MIPS
@@ -412,6 +417,14 @@ typedef enum
 
 } riTextureUsage;
 
+// Buffer usage flags
+typedef enum
+{
+    RI_BUFFER_USAGE_NONE        = 0,
+    RI_BUFFER_USAGE_SHADER_READ = 1u << 0, // Buffer can be read by shaders
+
+} riBufferUsage;
+
 // Texture dimensionality for concrete textures and views
 typedef enum
 {
@@ -441,6 +454,83 @@ typedef enum
 
 } riAttachmentStoreAction;
 
+// Primitive assembly topology
+typedef enum riPipelineTopology
+{
+    RI_PIPELINE_TOPOLOGY_TRIANGLE_LIST = 0, // Independent triangles
+    RI_PIPELINE_TOPOLOGY_LINE_LIST,         // Independent line segments
+    RI_PIPELINE_TOPOLOGY_POINT_LIST,        // Independent points
+
+} riPipelineTopology;
+
+// Rasterization fill mode
+typedef enum riPipelineFillMode
+{
+    RI_PIPELINE_FILL_MODE_SOLID = 0,
+    RI_PIPELINE_FILL_MODE_WIREFRAME,
+
+} riPipelineFillMode;
+
+// Rasterization culling mode
+typedef enum riPipelineCullMode
+{
+    RI_PIPELINE_CULL_MODE_NONE = 0,
+    RI_PIPELINE_CULL_MODE_FRONT,
+    RI_PIPELINE_CULL_MODE_BACK,
+
+} riPipelineCullMode;
+
+// Rasterization front-face winding
+typedef enum riPipelineFrontFace
+{
+    RI_PIPELINE_FRONT_FACE_COUNTER_CLOCKWISE = 0,
+    RI_PIPELINE_FRONT_FACE_CLOCKWISE,
+
+} riPipelineFrontFace;
+
+// Depth/stencil comparison operation
+typedef enum riCompareOperation
+{
+    RI_COMPARE_OPERATION_NEVER = 0,
+    RI_COMPARE_OPERATION_LESS,
+    RI_COMPARE_OPERATION_EQUAL,
+    RI_COMPARE_OPERATION_LESS_EQUAL,
+    RI_COMPARE_OPERATION_GREATER,
+    RI_COMPARE_OPERATION_NOT_EQUAL,
+    RI_COMPARE_OPERATION_GREATER_EQUAL,
+    RI_COMPARE_OPERATION_ALWAYS,
+
+} riCompareOperation;
+
+// Color blending factor
+typedef enum riBlendFactor
+{
+    RI_BLEND_FACTOR_ZERO = 0,
+    RI_BLEND_FACTOR_ONE,
+    RI_BLEND_FACTOR_SRC_COLOR,
+    RI_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+    RI_BLEND_FACTOR_DST_COLOR,
+    RI_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+    RI_BLEND_FACTOR_SRC_ALPHA,
+    RI_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    RI_BLEND_FACTOR_DST_ALPHA,
+    RI_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+    RI_BLEND_FACTOR_SRC_ALPHA_SATURATE,
+    RI_BLEND_FACTOR_BLEND_COLOR,
+
+} riBlendFactor;
+
+// Color blending operation
+typedef enum riBlendOperation
+{
+    RI_BLEND_OPERATION_ADD = 0,
+    RI_BLEND_OPERATION_SUBTRACT,
+    RI_BLEND_OPERATION_REVERSE_SUBTRACT,
+    RI_BLEND_OPERATION_MIN,
+    RI_BLEND_OPERATION_MAX,
+
+} riBlendOperation;
+
 #pragma endregion // Enumerations
 
 //----------------------------------------------------------------------------------
@@ -458,6 +548,11 @@ RHIO_OPAQUE_TYPE( riDevice );
 // Command submission objects
 RHIO_OPAQUE_TYPE( riCommandQueue );
 RHIO_OPAQUE_TYPE( riCommandList );
+
+// GPU resources
+RHIO_OPAQUE_TYPE( riBuffer );
+RHIO_OPAQUE_TYPE( riShaderModule );
+RHIO_OPAQUE_TYPE( riRenderPipeline );
 
 // Display and render-target objects
 RHIO_OPAQUE_TYPE( riSwapchain );
@@ -616,6 +711,58 @@ typedef struct riTextureViewInfo
 
 } riTextureViewInfo;
 
+// Buffer creation parameters
+typedef struct riBufferInfo
+{
+    riSize       size;  // Buffer size in bytes
+    riFlags      usage; // riBufferUsage bits
+    const void * data;  // Optional initial contents; not retained by RHIO
+    const char * name;  // Optional debug name, not retained by core
+
+} riBufferInfo;
+
+// Render pipeline creation parameters
+typedef struct riRenderPipelineInfo
+{
+    // General info
+    riU8 supportsIndirectCommands;
+
+    // Rasterizer
+    riPipelineFillMode  fillMode;
+    riPipelineCullMode  cullMode;
+    riPipelineFrontFace frontFace;
+    riPipelineTopology  topology;
+
+    // Depth-stencil
+    riU8               depthTestEnable;
+    riU8               depthWriteEnable;
+    riU8               depthClampEnable;
+    riCompareOperation depthCompareOp;
+    riU8               stencilTestEnable;
+    riU8               stencilWriteEnable;
+    riCompareOperation stencilCompareOp;
+    riTextureFormat    depthStencilFormat;
+
+    // Blending and color output
+    riU8             blendEnable[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendFactor    blendSrcRgbFactor[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendFactor    blendDstRgbFactor[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendOperation blendRgbOp[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendFactor    blendSrcAlphaFactor[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendFactor    blendDstAlphaFactor[RHIO_MAX_COLOR_ATTACHMENTS];
+    riBlendOperation blendAlphaOp[RHIO_MAX_COLOR_ATTACHMENTS];
+    riTextureFormat  renderTargetFormats[RHIO_MAX_COLOR_ATTACHMENTS];
+    riU32            renderTargetCount;
+
+    riShaderModule vertexShader;
+    riShaderModule fragmentShader;
+    riShaderModule meshShader;
+    riShaderModule taskShader;
+
+    const char * name; // Optional debug name
+
+} riRenderPipelineInfo;
+
 // Attachment parameters consumed when beginning a render pass
 typedef struct riRenderPassAttachmentInfo
 {
@@ -661,6 +808,14 @@ typedef struct riTextureVTable
 
 } riTextureVTable;
 
+// Buffer dispatch table
+typedef struct riBufferVTable
+{
+    void ( *destroy_buffer )( riBuffer buffer );
+    void ( *get_buffer_info )( riBuffer buffer, riBufferInfo * outInfo );
+
+} riBufferVTable;
+
 // Texture view dispatch table
 typedef struct riTextureViewVTable
 {
@@ -668,6 +823,14 @@ typedef struct riTextureViewVTable
     void ( *get_texture_view_info )( riTextureView textureView, riTextureViewInfo * outInfo );
 
 } riTextureViewVTable;
+
+// Render pipeline dispatch table
+typedef struct riRenderPipelineVTable
+{
+    void ( *destroy_render_pipeline )( riRenderPipeline pipeline );
+    void ( *get_render_pipeline_info )( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo );
+
+} riRenderPipelineVTable;
 
 // Swapchain dispatch table
 typedef struct riSwapchainVTable
@@ -694,6 +857,11 @@ typedef struct riCommandListVTable
 typedef struct riRenderPassVTable
 {
     riStatus ( *end )( riRenderPass renderPass );
+    riStatus ( *set_pipeline )( riRenderPass renderPass, riRenderPipeline pipeline );
+    riStatus ( *set_shader_buffer )( riRenderPass renderPass, riU32 slot, riBuffer buffer, riU32 offset );
+    riStatus ( *set_viewport )( riRenderPass renderPass, riU32 x, riU32 y, riU32 width, riU32 height );
+    riStatus ( *draw )( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                        riU32 firstInstance );
 
 } riRenderPassVTable;
 
@@ -718,6 +886,9 @@ typedef struct riDeviceVTable
                                     riSwapchain * outSwapchain );
     riStatus ( *create_texture_view )( riDevice device, const riTextureViewInfo * info,
                                        riTextureView * outTextureView );
+    riStatus ( *create_buffer )( riDevice device, const riBufferInfo * info, riBuffer * outBuffer );
+    riStatus ( *create_render_pipeline )( riDevice device, const riRenderPipelineInfo * info,
+                                          riRenderPipeline * outPipeline );
 
 } riDeviceVTable;
 
@@ -748,6 +919,9 @@ DECLARE_RI_BASE( riDevice );
 
 DECLARE_RI_BASE( riCommandQueue );
 DECLARE_RI_BASE( riCommandList );
+
+DECLARE_RI_BASE( riBuffer );
+DECLARE_RI_BASE( riRenderPipeline );
 
 DECLARE_RI_BASE( riSwapchain );
 
@@ -837,6 +1011,17 @@ RI_API riStatus rhioCommandListReset( riCommandList commandList );
 RI_API riStatus rhioCommandListBeginRenderPass( riCommandList commandList, const riRenderPassInfo * info,
                                                 riRenderPass * outRenderPass );
 
+// Buffers
+RI_API riStatus rhioCreateBuffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer );
+RI_API void     rhioDestroyBuffer( riBuffer buffer );
+RI_API void     rhioGetBufferInfo( riBuffer buffer, riBufferInfo * outInfo );
+
+// Render pipelines
+RI_API riStatus rhioCreateRenderPipeline( riDevice device, const riRenderPipelineInfo * info,
+                                          riRenderPipeline * outPipeline );
+RI_API void     rhioDestroyRenderPipeline( riRenderPipeline pipeline );
+RI_API void     rhioGetRenderPipelineInfo( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo );
+
 // Swapchains
 RI_API riStatus rhioCreateSwapchain( riDevice device, riCommandQueue queue, const riSwapchainInfo * info,
                                      riSwapchain * outSwapchain );
@@ -851,6 +1036,11 @@ RI_API void     rhioDestroyTextureView( riTextureView textureView );
 
 // Render passes
 RI_API riStatus rhioRenderPassEnd( riRenderPass renderPass );
+RI_API riStatus rhioRenderPassSetPipeline( riRenderPass renderPass, riRenderPipeline pipeline );
+RI_API riStatus rhioRenderPassSetShaderBuffer( riRenderPass renderPass, riU32 slot, riBuffer buffer, riU32 offset );
+RI_API riStatus rhioRenderPassSetViewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width, riU32 height );
+RI_API riStatus rhioRenderPassDraw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                                    riU32 firstInstance );
 
 // Logging system
 RI_API void riSetTraceLogLevel( int logType );                  // Set the minimum log level
@@ -875,6 +1065,23 @@ RI_API void riSetTraceLogCallback( TraceLogCallback callback ); // Set custom tr
 #        include <android/log.h>
 #    endif
 
+//----------------------------------------------------------------------------------
+// Internal Macros
+//----------------------------------------------------------------------------------
+
+// Calls func(in_val, out_ptr), stores result in `riStatus status`, returns on failure
+#    define TRY_CONVERT( func, in_val, out_ptr )                                                                       \
+        do                                                                                                             \
+            {                                                                                                          \
+                status = func( ( in_val ), ( out_ptr ) );                                                              \
+                if( RI_FAILED( status ) ) return status;                                                               \
+            }                                                                                                          \
+        while( 0 )
+
+//----------------------------------------------------------------------------------
+// Internal Structs
+//----------------------------------------------------------------------------------
+
 // Resolved backend metadata used only during device creation
 // NOTE: Registration functions fill this struct so built-in and custom backends
 // follow the same creation path.
@@ -887,13 +1094,6 @@ typedef struct riBackendDesc
     riFlags                flags;      // riDeviceFlag bits requested for backend initialization
 
 } riBackendDesc;
-
-//----------------------------------------------------------------------------------
-// Internal device struct (hidden from callers — Handle pattern)
-//
-// The public `riDevice` typedef is `struct riDevice_opaque*`.  Backend structs
-// expose dispatch by embedding `riDeviceBase` as their first member.
-//----------------------------------------------------------------------------------
 
 //----------------------------------------------------------------------------------
 // Module Internal State
@@ -912,7 +1112,9 @@ static riStatus _rhioValidateDeviceVTable( const riDeviceVTable * vtable );
 static riStatus _rhioValidateCommandQueueVTable( const riCommandQueueVTable * vtable );
 static riStatus _rhioValidateCommandListVTable( const riCommandListVTable * vtable );
 static riStatus _rhioValidateSwapchainVTable( const riSwapchainVTable * vtable );
+static riStatus _rhioValidateBufferVTable( const riBufferVTable * vtable );
 static riStatus _rhioValidateTextureViewVTable( const riTextureViewVTable * vtable );
+static riStatus _rhioValidateRenderPipelineVTable( const riRenderPipelineVTable * vtable );
 static riStatus _rhioValidateRenderPassVTable( const riRenderPassVTable * vtable );
 
 // OpenGL family backend registration (desktop GL, OpenGL ES and WebGL)
@@ -1453,6 +1655,174 @@ rhioCommandQueueSubmitInfo( riCommandQueue queue, const riCommandQueueSubmitInfo
 
 /* ---------------------------------------------------------------------------------
  *
+ * BUFFERS / PIPELINES                                               [>>RESOURCES<<]
+ *
+ * ---------------------------------------------------------------------------------*/
+
+#    pragma region "Resources"
+
+// Create a backend buffer
+RI_API riStatus
+rhioCreateBuffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer )
+{
+    riDeviceBase * deviceBase = NULL;
+    riBufferBase * bufferBase = NULL;
+    riStatus       status     = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( outBuffer != NULL, RI_ERROR_INVALID_PARAM );
+    *outBuffer = NULL;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+
+    deviceBase = (riDeviceBase *)device;
+
+    RI_GUARD( deviceBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable->create_buffer != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    status = deviceBase->vtable->create_buffer( device, info, outBuffer );
+    if( RI_FAILED( status ) )
+        {
+            *outBuffer = NULL;
+            return status;
+        }
+
+    RI_GUARD( *outBuffer != NULL, RI_ERROR_INVALID_STATE );
+
+    bufferBase = (riBufferBase *)*outBuffer;
+    status     = _rhioValidateBufferVTable( bufferBase->vtable );
+    if( RI_FAILED( status ) )
+        {
+            if( bufferBase->vtable != NULL && bufferBase->vtable->destroy_buffer != NULL )
+                {
+                    bufferBase->vtable->destroy_buffer( *outBuffer );
+                }
+
+            RI_FREE( *outBuffer );
+            *outBuffer = NULL;
+            return status;
+        }
+
+    return RI_SUCCESS;
+}
+
+// Destroy a backend buffer
+RI_API void
+rhioDestroyBuffer( riBuffer buffer )
+{
+    riBufferBase * bufferBase = NULL;
+
+    if( buffer == NULL ) return;
+
+    bufferBase = (riBufferBase *)buffer;
+
+    if( bufferBase->vtable != NULL && bufferBase->vtable->destroy_buffer != NULL )
+        {
+            bufferBase->vtable->destroy_buffer( buffer );
+        }
+
+    RI_FREE( buffer );
+}
+
+// Return buffer metadata
+RI_API void
+rhioGetBufferInfo( riBuffer buffer, riBufferInfo * outInfo )
+{
+    riBufferBase * bufferBase = NULL;
+
+    if( buffer == NULL || outInfo == NULL ) return;
+
+    bufferBase = (riBufferBase *)buffer;
+
+    if( bufferBase->vtable != NULL && bufferBase->vtable->get_buffer_info != NULL )
+        {
+            bufferBase->vtable->get_buffer_info( buffer, outInfo );
+        }
+}
+
+// Create a backend render pipeline
+RI_API riStatus
+rhioCreateRenderPipeline( riDevice device, const riRenderPipelineInfo * info, riRenderPipeline * outPipeline )
+{
+    riDeviceBase *         deviceBase   = NULL;
+    riRenderPipelineBase * pipelineBase = NULL;
+    riStatus               status       = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( outPipeline != NULL, RI_ERROR_INVALID_PARAM );
+    *outPipeline = NULL;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+
+    deviceBase = (riDeviceBase *)device;
+
+    RI_GUARD( deviceBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( deviceBase->vtable->create_render_pipeline != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    status = deviceBase->vtable->create_render_pipeline( device, info, outPipeline );
+    if( RI_FAILED( status ) )
+        {
+            *outPipeline = NULL;
+            return status;
+        }
+
+    RI_GUARD( *outPipeline != NULL, RI_ERROR_INVALID_STATE );
+
+    pipelineBase = (riRenderPipelineBase *)*outPipeline;
+    status       = _rhioValidateRenderPipelineVTable( pipelineBase->vtable );
+    if( RI_FAILED( status ) )
+        {
+            if( pipelineBase->vtable != NULL && pipelineBase->vtable->destroy_render_pipeline != NULL )
+                {
+                    pipelineBase->vtable->destroy_render_pipeline( *outPipeline );
+                }
+
+            RI_FREE( *outPipeline );
+            *outPipeline = NULL;
+            return status;
+        }
+
+    return RI_SUCCESS;
+}
+
+// Destroy a render pipeline
+RI_API void
+rhioDestroyRenderPipeline( riRenderPipeline pipeline )
+{
+    riRenderPipelineBase * pipelineBase = NULL;
+
+    if( pipeline == NULL ) return;
+
+    pipelineBase = (riRenderPipelineBase *)pipeline;
+
+    if( pipelineBase->vtable != NULL && pipelineBase->vtable->destroy_render_pipeline != NULL )
+        {
+            pipelineBase->vtable->destroy_render_pipeline( pipeline );
+        }
+
+    RI_FREE( pipeline );
+}
+
+// Return render pipeline metadata
+RI_API void
+rhioGetRenderPipelineInfo( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo )
+{
+    riRenderPipelineBase * pipelineBase = NULL;
+
+    if( pipeline == NULL || outInfo == NULL ) return;
+
+    pipelineBase = (riRenderPipelineBase *)pipeline;
+
+    if( pipelineBase->vtable != NULL && pipelineBase->vtable->get_render_pipeline_info != NULL )
+        {
+            pipelineBase->vtable->get_render_pipeline_info( pipeline, outInfo );
+        }
+}
+
+#    pragma endregion // Resources
+
+/* ---------------------------------------------------------------------------------
+ *
  * SWAPCHAINS / TEXTURE VIEWS / RENDER PASSES                         [>>FRAME<<]
  *
  * ---------------------------------------------------------------------------------*/
@@ -1661,6 +2031,73 @@ rhioRenderPassEnd( riRenderPass renderPass )
     return passBase->vtable->end( renderPass );
 }
 
+// Record render pipeline bind into an active render pass
+RI_API riStatus
+rhioRenderPassSetPipeline( riRenderPass renderPass, riRenderPipeline pipeline )
+{
+    riRenderPassBase * passBase = NULL;
+
+    RI_GUARD( renderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
+
+    passBase = (riRenderPassBase *)renderPass;
+
+    RI_GUARD( passBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable->set_pipeline != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    return passBase->vtable->set_pipeline( renderPass, pipeline );
+}
+
+// Record shader-buffer bind into an active render pass
+RI_API riStatus
+rhioRenderPassSetShaderBuffer( riRenderPass renderPass, riU32 slot, riBuffer buffer, riU32 offset )
+{
+    riRenderPassBase * passBase = NULL;
+
+    RI_GUARD( renderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( buffer != NULL, RI_ERROR_INVALID_PARAM );
+
+    passBase = (riRenderPassBase *)renderPass;
+
+    RI_GUARD( passBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable->set_shader_buffer != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    return passBase->vtable->set_shader_buffer( renderPass, slot, buffer, offset );
+}
+
+// Record viewport state into an active render pass
+RI_API riStatus
+rhioRenderPassSetViewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width, riU32 height )
+{
+    riRenderPassBase * passBase = NULL;
+
+    RI_GUARD( renderPass != NULL, RI_ERROR_INVALID_PARAM );
+
+    passBase = (riRenderPassBase *)renderPass;
+
+    RI_GUARD( passBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable->set_viewport != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    return passBase->vtable->set_viewport( renderPass, x, y, width, height );
+}
+
+// Record a non-indexed draw into an active render pass
+RI_API riStatus
+rhioRenderPassDraw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                    riU32 firstInstance )
+{
+    riRenderPassBase * passBase = NULL;
+
+    RI_GUARD( renderPass != NULL, RI_ERROR_INVALID_PARAM );
+
+    passBase = (riRenderPassBase *)renderPass;
+
+    RI_GUARD( passBase->vtable != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( passBase->vtable->draw != NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    return passBase->vtable->draw( renderPass, vertexCount, instanceCount, firstVertex, firstInstance );
+}
+
 #    pragma endregion // Frame Control
 
 #    pragma endregion // API Impl
@@ -1771,9 +2208,23 @@ riSetTraceLogCallback( TraceLogCallback callback )
 // OpenGL Backend Configuration
 //----------------------------------------------------------------------------------
 
-// Default bytes per OpenGL command memory block
-#        ifndef RHIO_GL_COMMAND_BLOCK_SIZE
-#            define RHIO_GL_COMMAND_BLOCK_SIZE ( 16u * 1024u )
+// Default number of fixed-size OpenGL commands per memory block
+#        ifndef RHIO_GL_COMMANDS_PER_BLOCK
+#            define RHIO_GL_COMMANDS_PER_BLOCK 256u
+#        endif
+
+// Default number of command blocks preallocated per command list
+#        ifndef RHIO_GL_COMMAND_BLOCK_POOL_SIZE
+#            define RHIO_GL_COMMAND_BLOCK_POOL_SIZE 8u
+#        endif
+
+// Built-in triangle shader pulls three vertices from shader buffer binding 0
+#        ifndef RHIO_GL_TRIANGLE_VERTEX_COUNT
+#            define RHIO_GL_TRIANGLE_VERTEX_COUNT 3u
+#        endif
+
+#        ifndef RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING
+#            define RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING 0u
 #        endif
 
 //----------------------------------------------------------------------------------
@@ -1781,6 +2232,17 @@ riSetTraceLogCallback( TraceLogCallback callback )
 //----------------------------------------------------------------------------------
 // NOTE: rhio does not own an OpenGL context. The application/windowing owns it
 // This block provides only the minimal types and headers
+
+#        if defined( RHIO_BACKEND_OPENGL )                                                                             \
+            && !defined( RHIO_BACKEND_OPENGLES )                                                                       \
+            && !defined( RHIO_BACKEND_OPENGLES2 )                                                                      \
+            && !defined( RHIO_BACKEND_OPENGLES3 )
+#            define RHIO_GL_BACKEND_DESKTOP
+#        endif
+
+#        if defined( RHIO_GL_BACKEND_DESKTOP ) && !defined( __EMSCRIPTEN__ ) && !defined( __APPLE__ )
+#            define RHIO_GL_USE_GLEW
+#        endif
 
 // Emscripten / WebGL
 //------------------------------------------------------------------------------
@@ -1805,14 +2267,11 @@ riSetTraceLogCallback( TraceLogCallback callback )
 typedef void * riGL_DeviceContext;
 typedef void * riGL_RenderContext;
 
-#            define _RHIO_GL_LOAD( type, name ) ( (type)name )
-
 // Win32 / WGL
 //------------------------------------------------------------------------------
 #        elif defined( _WIN32 )
 
-// NOTE: Win32 uses WGL for context handles and extension lookup. windows.h must
-// be included before GL/gl.h so HDC/HGLRC are available to the OpenGL header
+// NOTE: Win32 uses WGL context handles. GLEW owns desktop GL entry-point loading.
 
 #            if !defined( WIN32_LEAN_AND_MEAN )
 #                define WIN32_LEAN_AND_MEAN
@@ -1821,14 +2280,11 @@ typedef void * riGL_RenderContext;
 #                define NOMINMAX
 #            endif
 
-#            include <GL/gl.h>
-#            include <GL/glext.h>
+#            include <GL/glew.h>
 #            include <windows.h>
 
 typedef HDC   riGL_DeviceContext;
 typedef HGLRC riGL_RenderContext;
-
-#            define _RHIO_GL_LOAD( type, name ) ( (type)wglGetProcAddress( #name ) )
 
 // Apple
 //------------------------------------------------------------------------------
@@ -1850,14 +2306,12 @@ typedef HGLRC riGL_RenderContext;
 typedef void * riGL_DeviceContext;
 typedef void * riGL_RenderContext;
 
-#            define _RHIO_GL_LOAD( type, name ) ( (type)name )
-
 // Unix-like (Linux / *BSD) / GLX + EGL
 //------------------------------------------------------------------------------
 #        elif defined( __linux__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
 
-// NOTE: Unix-like desktop GL uses GLX for extension lookup. GLES builds generally
-// expose the symbols directly through EGL or the platform loader used by app
+// NOTE: Unix-like GLES builds expose symbols directly through EGL. Desktop GL uses
+// GLEW for entry-point loading.
 
 #            if defined( RHIO_BACKEND_OPENGLES )                                                                       \
                 || defined( RHIO_BACKEND_OPENGLES2 )                                                                   \
@@ -1878,19 +2332,13 @@ typedef void * riGL_RenderContext;
 typedef void * riGL_DeviceContext;
 typedef void * riGL_RenderContext;
 
-#                define _RHIO_GL_LOAD( type, name ) ( (type)name )
+#            else                          /* RHIO_BACKEND_OPENGLES */
 
-#            else /* RHIO_BACKEND_OPENGLES */
-
-#                include <GL/gl.h>
-#                include <GL/glext.h>
-#                include <GL/glx.h>
+#                include <GL/glew.h>
 #                include <X11/Xlib.h>
 
-typedef Display *  riGL_DeviceContext;
-typedef GLXContext riGL_RenderContext;
-
-#                define _RHIO_GL_LOAD( type, name ) ( (type)glXGetProcAddress( (const GLubyte *)#name ) )
+typedef Display * riGL_DeviceContext;
+typedef void *    riGL_RenderContext;
 
 #            endif /* RHIO_BACKEND_OPENGLES || RHIO_BACKEND_OPENGLES2 || RHIO_BACKEND_OPENGLES3 */
 
@@ -1904,24 +2352,18 @@ typedef GLXContext riGL_RenderContext;
 // Compatibility Defines
 //----------------------------------------------------------------------------------
 
-#        if !defined( GL_SHADING_LANGUAGE_VERSION )
-#            define GL_SHADING_LANGUAGE_VERSION 0x8B8C
+#        if defined( RHIO_BACKEND_OPENGLES ) || defined( RHIO_BACKEND_OPENGLES2 ) || defined( RHIO_BACKEND_OPENGLES3 )
+#            define glClearDepth( depth ) glClearDepthf( (GLfloat)( depth ) )
+#        else
+#            define glClearDepth( depth ) glClearDepth( (GLdouble)( depth ) )
 #        endif
 
-#        if !defined( GL_CLAMP ) && defined( GL_CLAMP_TO_EDGE )
-#            define GL_CLAMP GL_CLAMP_TO_EDGE
+#        if defined( RHIO_GL_BACKEND_DESKTOP ) || defined( RHIO_BACKEND_OPENGLES3 )
+#            define RHIO_GL_HAS_VERTEX_ARRAY_OBJECT
 #        endif
 
-#        if defined( RHIO_BACKEND_OPENGLES2 )
-#            define glClearDepth glClearDepthf
-#        endif
-
-#        if !defined( RHIO_BACKEND_OPENGLES )                                                                          \
-            && !defined( RHIO_BACKEND_OPENGLES2 )                                                                      \
-            && !defined( RHIO_BACKEND_OPENGLES3 )                                                                      \
-            && !defined( __APPLE__ )
-#            define RHIO_GL_NEEDS_FRAMEBUFFER_BIND_LOADER
-static PFNGLBINDFRAMEBUFFERPROC rhio_glBindFramebufferProc = NULL;
+#        if defined( RHIO_GL_BACKEND_DESKTOP ) || defined( RHIO_BACKEND_OPENGLES3 )
+#            define RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING
 #        endif
 
 //----------------------------------------------------------------------------------
@@ -1931,9 +2373,34 @@ static PFNGLBINDFRAMEBUFFERPROC rhio_glBindFramebufferProc = NULL;
 // Internal OpenGL device state
 typedef struct riGL_Device
 {
-    riDeviceBase base; // Frontend handle dispatch
+    riDeviceBase base;                  // Frontend handle dispatch
+#        if defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    GLint uniformBufferOffsetAlignment; // Alignment required for glBindBufferRange offsets
+#        endif
+#        if defined( RHIO_GL_HAS_VERTEX_ARRAY_OBJECT )
+    GLuint defaultVertexArray;          // Shared VAO required by desktop core profile
+#        endif
 
 } riGL_Device;
+
+// Internal OpenGL buffer state
+typedef struct riGL_Buffer
+{
+    riBufferBase base;   // Frontend handle dispatch
+    riBufferInfo info;   // Normalized metadata; data pointer is not retained
+    GLuint       buffer; // GL buffer object name
+
+} riGL_Buffer;
+
+// Internal OpenGL render pipeline state
+typedef struct riGL_RenderPipeline
+{
+    riRenderPipelineBase base;      // Frontend handle dispatch
+    riRenderPipelineInfo info;      // Normalized metadata
+    GLuint               program;   // Linked passthrough shader program
+    GLenum               primitive; // GL primitive topology
+
+} riGL_RenderPipeline;
 
 // Internal OpenGL texture state
 typedef struct riGL_Texture
@@ -1987,67 +2454,113 @@ typedef enum riGL_CommandListState
 // Internal OpenGL command identifiers
 typedef enum riGL_CommandType
 {
-    RI_GL_COMMAND_CLEAR_FRAMEBUFFER = 0, // Command to clear the current framebuffer
+    RI_GL_COMMAND_BIND_DEFAULT_FRAMEBUFFER = 0,
+    RI_GL_COMMAND_SET_VIEWPORT,
+    RI_GL_COMMAND_SET_SCISSOR,
+    RI_GL_COMMAND_SET_SCISSOR_ENABLED,
+    RI_GL_COMMAND_SET_CLEAR_COLOR,
+    RI_GL_COMMAND_SET_CLEAR_DEPTH_STENCIL,
+    RI_GL_COMMAND_CLEAR,
+    RI_GL_COMMAND_BIND_PIPELINE,
+    RI_GL_COMMAND_BIND_SHADER_BUFFER,
+    RI_GL_COMMAND_DRAW,
 
 } riGL_CommandType;
 
-// Common header for all OpenGL command records
-typedef struct riGL_CommandHeader
+typedef struct riGL_CmdSetRect
 {
-    riU32 type; // riGL_CommandType identifier
-    riU32 size; // Aligned command record size in bytes
+    riU32 x;
+    riU32 y;
+    riU32 width;
+    riU32 height;
 
-} riGL_CommandHeader;
+} riGL_CmdSetRect;
 
-// Clear command parameters
-typedef struct riGL_ClearCommand
+typedef struct riGL_CmdSetClearColor
 {
-    GLbitfield mask; // OpenGL clear mask (GL_COLOR_BUFFER_BIT, etc.)
+    riF32 r;
+    riF32 g;
+    riF32 b;
+    riF32 a;
 
-    // Color
-    bool  hasColor; // Whether to clear the color buffer
-    riF32 color[4]; // Clear color values (RGBA)
+} riGL_CmdSetClearColor;
 
-    // Depth
-    bool  hasDepth; // Whether to clear the depth buffer
-    riF32 depth;    // Clear depth value
-
-    // Stencil
-    bool hasStencil; // Whether to clear the stencil buffer
-    riU8 stencil;    // Clear stencil value
-
-    // Scissor
-    bool    useScissor;    // Whether to apply a scissor rect during clear
-    GLint   scissorX;      // Scissor rectangle X coordinate
-    GLint   scissorY;      // Scissor rectangle Y coordinate
-    GLsizei scissorWidth;  // Scissor rectangle width
-    GLsizei scissorHeight; // Scissor rectangle height
-
-} riGL_ClearCommand;
-
-// Full record for a clear command in the command buffer
-typedef struct riGL_ClearCommandRecord
+typedef struct riGL_CmdSetClearDepthStencil
 {
-    riGL_CommandHeader header; // Command header
-    riGL_ClearCommand  clear;  // Clear parameters
+    riF32 depth;
+    riU8  stencil;
+    riU8  clearDepth;
+    riU8  clearStencil;
+    riU8  _pad;
 
-} riGL_ClearCommandRecord;
+} riGL_CmdSetClearDepthStencil;
 
-// Aligned raw data storage for command blocks
-typedef union riGL_CommandBlockData
+typedef struct riGL_CmdSetEnabled
 {
-    riUPtr alignment; // Ensures block data is pointer-aligned
-    riU8   bytes[1];  // Flexible array member for command storage
+    riU32 enabled;
 
-} riGL_CommandBlockData;
+} riGL_CmdSetEnabled;
 
-// A block of linear memory for storing encoded commands
+typedef struct riGL_CmdClear
+{
+    riU32 mask;
+
+} riGL_CmdClear;
+
+typedef struct riGL_CmdBindPipeline
+{
+    riRenderPipeline pipeline;
+
+} riGL_CmdBindPipeline;
+
+typedef struct riGL_CmdBindShaderBuffer
+{
+    riBuffer buffer;
+    riU32    offset;
+    riU32    slot;
+
+} riGL_CmdBindShaderBuffer;
+
+typedef struct riGL_CmdDraw
+{
+    riU32 vertexCount;
+    riU32 instanceCount;
+    riU32 firstVertex;
+    riU32 firstInstance;
+
+} riGL_CmdDraw;
+
+typedef union riGL_CommandData
+{
+    riGL_CmdSetRect              setRect;
+    riGL_CmdSetClearColor        setClearColor;
+    riGL_CmdSetClearDepthStencil setClearDepthStencil;
+    riGL_CmdSetEnabled           setEnabled;
+    riGL_CmdClear                clear;
+    riGL_CmdBindPipeline         bindPipeline;
+    riGL_CmdBindShaderBuffer     bindShaderBuffer;
+    riGL_CmdDraw                 draw;
+
+} riGL_CommandData;
+
+// Fixed-size OpenGL command record. Keep this small to preserve command-stream locality.
+typedef struct riGL_Command
+{
+    riU32            type; // riGL_CommandType identifier
+    riGL_CommandData data;
+
+} riGL_Command;
+
+// 24 = sizeof(riU32 type) + 4 pad + sizeof(riGL_CommandData union) where largest members are 16 bytes
+RHIO_STATIC_ASSERT( sizeof( riGL_Command ) <= 24u, "OpenGL emitted command records must stay <= 24 bytes" );
+
+// A fixed-size block of command records
 typedef struct riGL_CommandBlock
 {
-    struct riGL_CommandBlock * next;     // Next active or recycled block
-    riSize                     used;     // Bytes consumed in data
-    riSize                     capacity; // Usable byte capacity in data
-    riGL_CommandBlockData      data;     // Aligned command storage
+    struct riGL_CommandBlock * next;        // Next active or recycled block
+    riU32                      used;        // Commands consumed in data
+    riU32                      capacity;    // Usable command count in data
+    riGL_Command               commands[1]; // Flexible command storage
 
 } riGL_CommandBlock;
 
@@ -2058,13 +2571,12 @@ typedef struct riGL_CommandAllocator
     riGL_CommandBlock * lastBlock;    // Last active block for O(1) appends
     riGL_CommandBlock * currentBlock; // Current write target
     riGL_CommandBlock * freeBlocks;   // Recycled blocks kept for the next reset
-    riSize              blockSize;    // Default block allocation size
+    riU32               commandsPerBlock;
 #        if defined( RHIO_DEBUG )
-    riU32  activeBlockCount;          // Number of blocks currently in use
-    riU32  freeBlockCount;            // Number of blocks in the free list
-    riU32  commandCount;              // Total number of commands recorded
-    riSize bytesUsed;                 // Current memory consumption in bytes
-    riSize peakBytesUsed;             // Maximum memory consumption recorded
+    riU32 activeBlockCount;           // Number of blocks currently in use
+    riU32 freeBlockCount;             // Number of blocks in the free list
+    riU32 commandCount;               // Total number of commands recorded
+    riU32 peakCommandCount;           // Maximum command count recorded
 #        endif
 
 } riGL_CommandAllocator;
@@ -2075,6 +2587,7 @@ typedef struct riGL_CommandList riGL_CommandList;
 typedef struct riGL_CommandQueue
 {
     riCommandQueueBase base;         // Frontend handle dispatch
+    riGL_Device *      device;       // Owning device state
     riGL_CommandList * commandLists; // Queue-owned command lists
 
 } riGL_CommandQueue;
@@ -2106,6 +2619,9 @@ static riStatus _rhioGL_create_swapchain( riDevice device, riCommandQueue queue,
                                           riSwapchain * outSwapchain );
 static riStatus _rhioGL_create_texture_view( riDevice device, const riTextureViewInfo * info,
                                              riTextureView * outTextureView );
+static riStatus _rhioGL_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer );
+static riStatus _rhioGL_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info,
+                                                riRenderPipeline * outPipeline );
 
 // Command queue
 static riStatus _rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue );
@@ -2128,27 +2644,63 @@ static riStatus _rhioGL_get_current_texture( riSwapchain swapchain, riTexture * 
 static riStatus _rhioGL_present( riSwapchain swapchain );
 
 // Texture / texture views
+static void _rhioGL_destroy_buffer( riBuffer buffer );
+static void _rhioGL_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo );
 static void _rhioGL_destroy_texture_noop( riTexture texture );
 static void _rhioGL_get_texture_info( riTexture texture, riTextureInfo * outInfo );
 static void _rhioGL_destroy_texture_view( riTextureView textureView );
 static void _rhioGL_get_texture_view_info( riTextureView textureView, riTextureViewInfo * outInfo );
+static void _rhioGL_destroy_render_pipeline( riRenderPipeline pipeline );
+static void _rhioGL_get_render_pipeline_info( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo );
 
 // Render pass
 static riStatus _rhioGL_render_pass_end( riRenderPass renderPass );
+static riStatus _rhioGL_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipeline );
+static riStatus _rhioGL_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBuffer buffer,
+                                                       riU32 offset );
+static riStatus _rhioGL_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width,
+                                                  riU32 height );
+static riStatus _rhioGL_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount,
+                                          riU32 firstVertex, riU32 firstInstance );
 
 // Command memory
-static void     _rhioGL_command_allocator_init( riGL_CommandAllocator * allocator );
+static riStatus _rhioGL_command_allocator_init( riGL_CommandAllocator * allocator );
 static void     _rhioGL_command_allocator_destroy( riGL_CommandAllocator * allocator );
 static void     _rhioGL_command_allocator_reset( riGL_CommandAllocator * allocator );
 static riStatus _rhioGL_command_allocator_write( riGL_CommandAllocator * allocator, riGL_CommandType type,
-                                                 riSize recordSize, riGL_CommandHeader ** outHeader );
+                                                 riGL_Command ** outCommand );
 static void     _rhioGL_command_list_clear_commands( riGL_CommandList * commandList );
-static riStatus _rhioGL_append_clear_command( riGL_CommandList * commandList, const riGL_ClearCommand * clear );
+static riStatus _rhioGL_append_bind_default_framebuffer_command( riGL_CommandList * commandList );
+static riStatus _rhioGL_append_set_viewport_command( riGL_CommandList * commandList, riU32 x, riU32 y, riU32 width,
+                                                     riU32 height );
+static riStatus _rhioGL_append_set_scissor_command( riGL_CommandList * commandList, riU32 x, riU32 y, riU32 width,
+                                                    riU32 height );
+static riStatus _rhioGL_append_set_scissor_enabled_command( riGL_CommandList * commandList, bool enabled );
+static riStatus _rhioGL_append_set_clear_color_command( riGL_CommandList * commandList, const riF32 color[4] );
+static riStatus _rhioGL_append_set_clear_depth_stencil_command( riGL_CommandList * commandList, riF32 depth,
+                                                                riU8 stencil, bool clearDepth, bool clearStencil );
+static riStatus _rhioGL_append_clear_command( riGL_CommandList * commandList, riU32 mask );
+static riStatus _rhioGL_append_bind_pipeline_command( riGL_CommandList * commandList, riRenderPipeline pipeline );
+static riStatus _rhioGL_append_bind_shader_buffer_command( riGL_CommandList * commandList, riU32 slot, riBuffer buffer,
+                                                           riU32 offset );
+static riStatus _rhioGL_append_draw_command( riGL_CommandList * commandList, riU32 vertexCount, riU32 instanceCount,
+                                             riU32 firstVertex, riU32 firstInstance );
 
 // Command execution
 static riStatus _rhioGL_execute_command_list( riGL_CommandList * commandList );
-static riStatus _rhioGL_execute_clear_command( const riGL_ClearCommand * clear );
+static riStatus _rhioGL_execute_draw_command( const riGL_Command * command, riGL_RenderPipeline * pipeline,
+                                              riGL_Buffer * shaderBuffers[RHIO_MAX_SHADER_BUFFER_BINDINGS],
+                                              const riU32   shaderBufferOffsets[RHIO_MAX_SHADER_BUFFER_BINDINGS] );
 static void     _rhioGL_bind_default_framebuffer( void );
+static riStatus _rhioGL_load_entrypoints( void );
+static riStatus _rhioGL_compile_shader( GLenum shaderType, const char * source, GLuint * outShader );
+static riStatus _rhioGL_create_builtin_program( GLuint * outProgram );
+static riStatus _rhioGL_validate_render_pipeline_info( const riRenderPipelineInfo * info );
+static riStatus _rhioGL_apply_pipeline_state( const riGL_RenderPipeline * pipeline );
+static riStatus _rhioGL_topology_to_gl( riPipelineTopology topology, GLenum * outTopology );
+static riStatus _rhioGL_compare_operation_to_gl( riCompareOperation operation, GLenum * outOperation );
+static riStatus _rhioGL_blend_factor_to_gl( riBlendFactor factor, GLenum * outFactor );
+static riStatus _rhioGL_blend_operation_to_gl( riBlendOperation operation, GLenum * outOperation );
 
 //----------------------------------------------------------------------------------
 // OpenGL Backend Vtable
@@ -2161,6 +2713,8 @@ static const riDeviceVTable s_gl_vtable = {
     BIND_FUNC( create_command_queue ),
     BIND_FUNC( create_swapchain ),
     BIND_FUNC( create_texture_view ),
+    BIND_FUNC( create_buffer ),
+    BIND_FUNC( create_render_pipeline ),
 };
 
 static const riCommandQueueVTable s_gl_command_queue_vtable = {
@@ -2189,13 +2743,27 @@ static const riTextureVTable s_gl_texture_vtable = {
     .get_texture_info = _rhioGL_get_texture_info,
 };
 
+static const riBufferVTable s_gl_buffer_vtable = {
+    BIND_FUNC( destroy_buffer ),
+    BIND_FUNC( get_buffer_info ),
+};
+
 static const riTextureViewVTable s_gl_texture_view_vtable = {
     BIND_FUNC( destroy_texture_view ),
     BIND_FUNC( get_texture_view_info ),
 };
 
+static const riRenderPipelineVTable s_gl_render_pipeline_vtable = {
+    BIND_FUNC( destroy_render_pipeline ),
+    BIND_FUNC( get_render_pipeline_info ),
+};
+
 static const riRenderPassVTable s_gl_render_pass_vtable = {
-    .end = _rhioGL_render_pass_end,
+    .end               = _rhioGL_render_pass_end,
+    .set_pipeline      = _rhioGL_render_pass_set_pipeline,
+    .set_shader_buffer = _rhioGL_render_pass_set_shader_buffer,
+    .set_viewport      = _rhioGL_render_pass_set_viewport,
+    .draw              = _rhioGL_render_pass_draw,
 };
 
 #        undef BIND_FUNC
@@ -2208,10 +2776,12 @@ static const riRenderPassVTable s_gl_render_pass_vtable = {
 static riStatus
 _rhioGL_init( riDevice device, const riBackendInitInfo * info )
 {
+    riGL_Device *   glDevice    = (riGL_Device *)device;
     const GLubyte * vendor      = NULL;
     const GLubyte * renderer    = NULL;
     const GLubyte * version     = NULL;
     const GLubyte * glslVersion = NULL;
+    riStatus        status      = RI_ERROR_UNKNOWN;
 
     RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
@@ -2229,23 +2799,37 @@ _rhioGL_init( riDevice device, const riBackendInitInfo * info )
             return RI_ERROR_BACKEND_INIT;
         }
 
+    // Entry Point Loading
+    //------------------------------------------------------------------------------
+    status = _rhioGL_load_entrypoints();
+    if( RI_FAILED( status ) ) return status;
+
     // Context Diagnostics
     //------------------------------------------------------------------------------
     vendor      = glGetString( GL_VENDOR );
     renderer    = glGetString( GL_RENDERER );
     glslVersion = glGetString( GL_SHADING_LANGUAGE_VERSION );
 
-#        if defined( RHIO_GL_NEEDS_FRAMEBUFFER_BIND_LOADER )
-    // Entry Point Loading
-    //------------------------------------------------------------------------------
-    // Desktop GL headers may expose FBO entry points only through the platform
-    // loader. GLES/WebGL and Apple paths bind them directly above
-    rhio_glBindFramebufferProc = _RHIO_GL_LOAD( PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer );
-    if( RI_UNLIKELY( rhio_glBindFramebufferProc == NULL ) )
+#        if defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    glGetIntegerv( GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &glDevice->uniformBufferOffsetAlignment );
+    if( glDevice->uniformBufferOffsetAlignment <= 0 )
         {
-            TRACELOG( RI_LOG_ERROR, "BACKEND GL: Missing required entry point glBindFramebuffer" );
+            glDevice->uniformBufferOffsetAlignment = 1;
+        }
+#        endif
+
+#        if defined( RHIO_GL_HAS_VERTEX_ARRAY_OBJECT )
+    // Default Vertex Array
+    //------------------------------------------------------------------------------
+    // Desktop core OpenGL requires a VAO to issue draws. ES2 builds skip this
+    // path because VAOs are not core there.
+    glGenVertexArrays( 1, &glDevice->defaultVertexArray );
+    if( RI_UNLIKELY( glDevice->defaultVertexArray == 0u ) )
+        {
             return RI_ERROR_BACKEND_INIT;
         }
+
+    glBindVertexArray( glDevice->defaultVertexArray );
 #        endif
 
     TRACELOG( RI_LOG_INFO, "BACKEND GL: Initialized context" );
@@ -2269,6 +2853,13 @@ _rhioGL_shutdown( riDevice device )
     //----------------------------------------------------------
     if( NULL != glDevice )
         {
+#        if defined( RHIO_GL_HAS_VERTEX_ARRAY_OBJECT )
+            if( glDevice->defaultVertexArray != 0u )
+                {
+                    glDeleteVertexArrays( 1, &glDevice->defaultVertexArray );
+                }
+#        endif
+
             emptyDevice.base = glDevice->base; // Preserve frontend dispatch state
             *glDevice        = emptyDevice;
         }
@@ -2426,6 +3017,107 @@ _rhioGL_create_texture_view( riDevice device, const riTextureViewInfo * info, ri
     return RI_SUCCESS;
 }
 
+// Create a GL buffer and optionally upload initial contents
+static riStatus
+_rhioGL_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer )
+{
+    riGL_Buffer * glBuffer   = NULL;
+    riBufferInfo  normalized = RI_ZERO_INIT;
+    const riFlags validUsage = RI_BUFFER_USAGE_SHADER_READ;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outBuffer != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->size > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( info->usage, ~validUsage ) == 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( info->usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
+
+#        if !defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    UNUSED( device );
+    UNUSED( outBuffer );
+    return RI_ERROR_BACKEND_UNAVAIL;
+#        endif
+
+    glBuffer = (riGL_Buffer *)RI_CALLOC( 1, sizeof( *glBuffer ) );
+    if( RI_UNLIKELY( glBuffer == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    normalized            = *info;
+    normalized.data       = NULL;
+
+    glBuffer->base.vtable = &s_gl_buffer_vtable;
+    glBuffer->info        = normalized;
+
+    glGenBuffers( 1, &glBuffer->buffer );
+    if( RI_UNLIKELY( glBuffer->buffer == 0u ) )
+        {
+            RI_FREE( glBuffer );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    glBindBuffer( GL_UNIFORM_BUFFER, glBuffer->buffer );
+    glBufferData( GL_UNIFORM_BUFFER, (GLsizeiptr)info->size, info->data, GL_STATIC_DRAW );
+    glBindBuffer( GL_UNIFORM_BUFFER, 0u );
+
+    *outBuffer = (riBuffer)glBuffer;
+
+    return RI_SUCCESS;
+}
+
+// Create a render pipeline using the backend's hardcoded passthrough shader
+static riStatus
+_rhioGL_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info, riRenderPipeline * outPipeline )
+{
+    riGL_RenderPipeline * glPipeline = NULL;
+    riRenderPipelineInfo  normalized = RI_ZERO_INIT;
+    riStatus              status     = RI_ERROR_UNKNOWN;
+    GLuint                program    = 0u;
+    GLenum                primitive  = GL_TRIANGLES;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outPipeline != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_validate_render_pipeline_info( info );
+    if( RI_FAILED( status ) ) return status;
+
+#        if !defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    UNUSED( device );
+    UNUSED( outPipeline );
+    return RI_ERROR_BACKEND_UNAVAIL;
+#        endif
+
+    TRY_CONVERT( _rhioGL_topology_to_gl, info->topology, &primitive );
+
+    status = _rhioGL_create_builtin_program( &program );
+    if( RI_FAILED( status ) ) return status;
+
+    glPipeline = (riGL_RenderPipeline *)RI_CALLOC( 1, sizeof( *glPipeline ) );
+    if( RI_UNLIKELY( glPipeline == NULL ) )
+        {
+            glDeleteProgram( program );
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    normalized = *info;
+    if( normalized.renderTargetCount == 0u )
+        {
+            normalized.renderTargetCount      = 1u;
+            normalized.renderTargetFormats[0] = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+        }
+
+    glPipeline->base.vtable = &s_gl_render_pipeline_vtable;
+    glPipeline->info        = normalized;
+    glPipeline->program     = program;
+    glPipeline->primitive   = primitive;
+
+    *outPipeline            = (riRenderPipeline)glPipeline;
+
+    return RI_SUCCESS;
+}
+
 // Initialize an OpenGL command queue wrapper
 static riStatus
 _rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue )
@@ -2446,6 +3138,7 @@ _rhioGL_create_command_queue( riDevice device, riCommandQueue * outQueue )
     // Queue Dispatch Initialization
     //----------------------------------------------------------
     glQueue->base.vtable = &s_gl_command_queue_vtable;
+    glQueue->device      = (riGL_Device *)device;
 
     // Queue Handle Handoff
     //----------------------------------------------------------
@@ -2486,7 +3179,15 @@ _rhioGL_create_command_list( riCommandQueue queue, riCommandList * outCommandLis
     glCommandList->next   = glQueue->commandLists;
     glQueue->commandLists = glCommandList;
 
-    _rhioGL_command_allocator_init( &glCommandList->commandAllocator );
+    {
+        riStatus status = _rhioGL_command_allocator_init( &glCommandList->commandAllocator );
+        if( RI_FAILED( status ) )
+            {
+                glQueue->commandLists = glCommandList->next;
+                RI_FREE( glCommandList );
+                return status;
+            }
+    }
 
     // Command List Handle Handoff
     //----------------------------------------------------------
@@ -2572,10 +3273,12 @@ _rhioGL_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
             status               = _rhioGL_execute_command_list( glCommandList );
             if( RI_FAILED( status ) )
                 {
-                    glCommandList->state = RI_GL_COMMAND_LIST_STATE_EXECUTABLE;
+                    _rhioGL_command_list_clear_commands( glCommandList );
+                    glCommandList->state = RI_GL_COMMAND_LIST_STATE_SUBMITTED;
                     return status;
                 }
 
+            _rhioGL_command_list_clear_commands( glCommandList );
             glCommandList->state = RI_GL_COMMAND_LIST_STATE_SUBMITTED;
         }
 
@@ -2674,13 +3377,22 @@ _rhioGL_command_list_reset( riCommandList commandList )
 static riStatus
 _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info, riRenderPass * outRenderPass )
 {
-    riGL_CommandList *                 glCommandList = (riGL_CommandList *)commandList;
-    riGL_RenderPass *                  glRenderPass  = NULL;
-    const riRenderPassAttachmentInfo * attachment    = NULL;
-    riGL_TextureView *                 glTextureView = NULL;
-    riGL_ClearCommand                  clear         = RI_ZERO_INIT;
-    riU32                              i             = 0;
-    riStatus                           status        = RI_ERROR_UNKNOWN;
+    riGL_CommandList *                 glCommandList   = (riGL_CommandList *)commandList;
+    riGL_RenderPass *                  glRenderPass    = NULL;
+    const riRenderPassAttachmentInfo * attachment      = NULL;
+    riGL_TextureView *                 glTextureView   = NULL;
+    riF32                              clearColor[4]   = { 0.0f, 0.0f, 0.0f, 0.0f };
+    riF32                              clearDepth      = 1.0f;
+    riU8                               clearStencil    = 0u;
+    riU32                              clearMask       = 0u;
+    riU32                              targetWidth     = 0u;
+    riU32                              targetHeight    = 0u;
+    bool                               hasClearColor   = false;
+    bool                               hasClearDepth   = false;
+    bool                               hasClearStencil = false;
+    bool                               clearScissored  = false;
+    riU32                              i               = 0;
+    riStatus                           status          = RI_ERROR_UNKNOWN;
 
     RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
@@ -2714,17 +3426,24 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
 
             glTextureView = (riGL_TextureView *)attachment->textureView;
             RI_GUARD( glTextureView->isDefaultFramebuffer, RI_ERROR_BACKEND_UNAVAIL );
+            RI_GUARD( glTextureView->texture != NULL, RI_ERROR_INVALID_STATE );
             RI_GUARD( RI_FLAG_CHECK( glTextureView->info.usage, RI_TEXTURE_USAGE_RENDER_TARGET ) != 0u,
                       RI_ERROR_INVALID_PARAM );
 
+            if( i == 0u )
+                {
+                    targetWidth  = glTextureView->texture->info.width;
+                    targetHeight = glTextureView->texture->info.height;
+                }
+
             if( attachment->loadAction == RI_ATTACHMENT_LOAD_ACTION_CLEAR )
                 {
-                    clear.hasColor = true;
-                    clear.color[0] = attachment->clearColor[0];
-                    clear.color[1] = attachment->clearColor[1];
-                    clear.color[2] = attachment->clearColor[2];
-                    clear.color[3] = attachment->clearColor[3];
-                    clear.mask |= GL_COLOR_BUFFER_BIT;
+                    hasClearColor = true;
+                    clearColor[0] = attachment->clearColor[0];
+                    clearColor[1] = attachment->clearColor[1];
+                    clearColor[2] = attachment->clearColor[2];
+                    clearColor[3] = attachment->clearColor[3];
+                    clearMask |= (riU32)GL_COLOR_BUFFER_BIT;
                 }
         }
 
@@ -2737,33 +3456,84 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
 
             glTextureView = (riGL_TextureView *)attachment->textureView;
             RI_GUARD( glTextureView->isDefaultFramebuffer, RI_ERROR_BACKEND_UNAVAIL );
+            RI_GUARD( glTextureView->texture != NULL, RI_ERROR_INVALID_STATE );
             RI_GUARD( RI_FLAG_CHECK( glTextureView->info.usage, RI_TEXTURE_USAGE_DEPTH_STENCIL ) != 0u,
                       RI_ERROR_INVALID_PARAM );
 
+            if( targetWidth == 0u || targetHeight == 0u )
+                {
+                    targetWidth  = glTextureView->texture->info.width;
+                    targetHeight = glTextureView->texture->info.height;
+                }
+
             if( attachment->loadAction == RI_ATTACHMENT_LOAD_ACTION_CLEAR )
                 {
-                    clear.hasDepth   = true;
-                    clear.depth      = attachment->clearDepth;
-                    clear.hasStencil = true;
-                    clear.stencil    = attachment->clearStencil;
-                    clear.mask |= GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+                    hasClearDepth   = true;
+                    clearDepth      = attachment->clearDepth;
+                    hasClearStencil = true;
+                    clearStencil    = attachment->clearStencil;
+                    clearMask |= (riU32)( GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT );
                 }
         }
 
+    RI_GUARD( targetWidth > 0u, RI_ERROR_INVALID_STATE );
+    RI_GUARD( targetHeight > 0u, RI_ERROR_INVALID_STATE );
+    RI_GUARD( info->renderAreaX <= targetWidth, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderAreaY <= targetHeight, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderWidth <= targetWidth - info->renderAreaX, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderHeight <= targetHeight - info->renderAreaY, RI_ERROR_INVALID_PARAM );
+
+    // Target Binding
+    //----------------------------------------------------------
+    status = _rhioGL_append_bind_default_framebuffer_command( glCommandList );
+    if( RI_FAILED( status ) ) return status;
+
     // Clear Command Encoding
     //----------------------------------------------------------
-    // The render area becomes a temporary GL scissor at execution time. This keeps
-    // render-pass clear semantics consistent with explicit APIs
-    if( clear.mask != 0u )
+    // Clear state is deliberately encoded as granular commands instead of a fat
+    // render-pass command, matching the emulated command buffer contract.
+    if( clearMask != 0u )
         {
-            clear.useScissor    = true;
-            clear.scissorX      = (GLint)info->renderAreaX;
-            clear.scissorY      = (GLint)info->renderAreaY;
-            clear.scissorWidth  = (GLsizei)info->renderWidth;
-            clear.scissorHeight = (GLsizei)info->renderHeight;
+            if( hasClearColor )
+                {
+                    status = _rhioGL_append_set_clear_color_command( glCommandList, clearColor );
+                    if( RI_FAILED( status ) ) return status;
+                }
 
-            status              = _rhioGL_append_clear_command( glCommandList, &clear );
+            if( hasClearDepth || hasClearStencil )
+                {
+                    status = _rhioGL_append_set_clear_depth_stencil_command(
+                        glCommandList, clearDepth, clearStencil, hasClearDepth, hasClearStencil );
+                    if( RI_FAILED( status ) ) return status;
+                }
+
+            clearScissored = info->renderAreaX
+                             != 0u
+                             || info->renderAreaY
+                             != 0u
+                             || info->renderWidth
+                             != targetWidth
+                             || info->renderHeight
+                             != targetHeight;
+
+            if( clearScissored )
+                {
+                    status = _rhioGL_append_set_scissor_command(
+                        glCommandList, info->renderAreaX, info->renderAreaY, info->renderWidth, info->renderHeight );
+                    if( RI_FAILED( status ) ) return status;
+                }
+
+            status = _rhioGL_append_set_scissor_enabled_command( glCommandList, clearScissored );
             if( RI_FAILED( status ) ) return status;
+
+            status = _rhioGL_append_clear_command( glCommandList, clearMask );
+            if( RI_FAILED( status ) ) return status;
+
+            if( clearScissored )
+                {
+                    status = _rhioGL_append_set_scissor_enabled_command( glCommandList, false );
+                    if( RI_FAILED( status ) ) return status;
+                }
         }
 
     // Render Pass Handle Allocation
@@ -2864,6 +3634,31 @@ _rhioGL_destroy_texture_noop( riTexture texture )
     UNUSED( texture );
 }
 
+// Destroy a GL buffer
+static void
+_rhioGL_destroy_buffer( riBuffer buffer )
+{
+    riGL_Buffer * glBuffer = (riGL_Buffer *)buffer;
+
+    if( glBuffer != NULL && glBuffer->buffer != 0u )
+        {
+            glDeleteBuffers( 1, &glBuffer->buffer );
+            glBuffer->buffer = 0u;
+        }
+}
+
+// Return buffer metadata
+static void
+_rhioGL_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo )
+{
+    riGL_Buffer * glBuffer = (riGL_Buffer *)buffer;
+
+    if( glBuffer != NULL && outInfo != NULL )
+        {
+            *outInfo = glBuffer->info;
+        }
+}
+
 // Return texture metadata
 static void
 _rhioGL_get_texture_info( riTexture texture, riTextureInfo * outInfo )
@@ -2900,6 +3695,31 @@ _rhioGL_get_texture_view_info( riTextureView textureView, riTextureViewInfo * ou
         }
 }
 
+// Destroy a GL render pipeline
+static void
+_rhioGL_destroy_render_pipeline( riRenderPipeline pipeline )
+{
+    riGL_RenderPipeline * glPipeline = (riGL_RenderPipeline *)pipeline;
+
+    if( glPipeline != NULL && glPipeline->program != 0u )
+        {
+            glDeleteProgram( glPipeline->program );
+            glPipeline->program = 0u;
+        }
+}
+
+// Return render pipeline metadata
+static void
+_rhioGL_get_render_pipeline_info( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo )
+{
+    riGL_RenderPipeline * glPipeline = (riGL_RenderPipeline *)pipeline;
+
+    if( glPipeline != NULL && outInfo != NULL )
+        {
+            *outInfo = glPipeline->info;
+        }
+}
+
 // End a GL render pass
 static riStatus
 _rhioGL_render_pass_end( riRenderPass renderPass )
@@ -2918,54 +3738,116 @@ _rhioGL_render_pass_end( riRenderPass renderPass )
     return RI_SUCCESS;
 }
 
+// Record a render pipeline bind
+static riStatus
+_rhioGL_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipeline )
+{
+    riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
+
+    RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+
+    return _rhioGL_append_bind_pipeline_command( glRenderPass->commandList, pipeline );
+}
+
+// Record a shader-buffer bind
+static riStatus
+_rhioGL_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBuffer buffer, riU32 offset )
+{
+    riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
+    riGL_Buffer *     glBuffer     = (riGL_Buffer *)buffer;
+#        if defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    riGL_CommandQueue * glQueue  = NULL;
+    riGL_Device *       glDevice = NULL;
+#        endif
+
+    RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( glBuffer != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( glBuffer->info.usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( (riSize)offset <= glBuffer->info.size, RI_ERROR_INVALID_PARAM );
+
+#        if defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    glQueue  = (riGL_CommandQueue *)glRenderPass->commandList->queue;
+    glDevice = glQueue != NULL ? glQueue->device : NULL;
+    RI_GUARD( glDevice != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( ( offset % (riU32)glDevice->uniformBufferOffsetAlignment ) == 0u, RI_ERROR_INVALID_PARAM );
+#        endif
+
+    return _rhioGL_append_bind_shader_buffer_command( glRenderPass->commandList, slot, buffer, offset );
+}
+
+// Record viewport state
+static riStatus
+_rhioGL_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width, riU32 height )
+{
+    riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
+
+    RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
+
+    return _rhioGL_append_set_viewport_command( glRenderPass->commandList, x, y, width, height );
+}
+
+// Record a non-indexed draw
+static riStatus
+_rhioGL_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                          riU32 firstInstance )
+{
+    riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
+
+    RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( firstInstance == 0u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( firstVertex < RHIO_GL_TRIANGLE_VERTEX_COUNT, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vertexCount <= RHIO_GL_TRIANGLE_VERTEX_COUNT - firstVertex, RI_ERROR_INVALID_PARAM );
+
+    return _rhioGL_append_draw_command(
+        glRenderPass->commandList, vertexCount, instanceCount, firstVertex, firstInstance );
+}
+
 //----------------------------------------------------------------------------------
 // OpenGL Command Memory
 //----------------------------------------------------------------------------------
 
-// Align a byte size to a power-of-two boundary
-static riSize
-_rhioGL_align_up_size( riSize value, riSize alignment )
-{
-    riSize mask = 0u;
-
-    if( alignment == 0u ) return value;
-
-    // Alignment Validation
-    //----------------------------------------------------------
-    // A zero return means either "invalid alignment" or "overflow"; callers treat
-    // both as allocation/stream construction failure
-    mask = alignment - 1u;
-    if( ( alignment & mask ) != 0u ) return 0u;
-    if( value > ( ~(riSize)0u ) - mask ) return 0u;
-
-    return ( value + mask ) & ~mask;
-}
-
-// Allocate one command memory block with aligned storage
+// Allocate one fixed-capacity command block
 static riGL_CommandBlock *
-_rhioGL_command_block_allocate( riSize capacity )
+_rhioGL_command_block_allocate( riU32 capacity )
 {
     riGL_CommandBlock * block          = NULL;
     riSize              metadataSize   = 0u;
     riSize              allocationSize = 0u;
     riSize              maxAllocation  = (riSize)( (size_t)-1 );
 
-    // Capacity Normalization
-    //----------------------------------------------------------
-    // Command payload starts after flexible metadata, so the storage portion must
-    // remain pointer-aligned for every record written into it
-    capacity = _rhioGL_align_up_size( capacity, (riSize)sizeof( riUPtr ) );
     if( capacity == 0u ) return NULL;
 
     // Allocation Size Validation
     //----------------------------------------------------------
-    metadataSize = (riSize)sizeof( riGL_CommandBlock ) - (riSize)sizeof( ( (riGL_CommandBlock *)0 )->data );
+    metadataSize = (riSize)sizeof( riGL_CommandBlock ) - (riSize)sizeof( ( (riGL_CommandBlock *)0 )->commands );
     if( metadataSize > maxAllocation ) return NULL;
-    if( capacity > maxAllocation - metadataSize ) return NULL;
+    if( (riSize)capacity > ( maxAllocation - metadataSize ) / (riSize)sizeof( riGL_Command ) ) return NULL;
 
     // Block Allocation
     //----------------------------------------------------------
-    allocationSize = metadataSize + capacity;
+    allocationSize = metadataSize + ( (riSize)capacity * (riSize)sizeof( riGL_Command ) );
     block          = (riGL_CommandBlock *)RI_CALLOC( 1, (size_t)allocationSize );
     if( block == NULL ) return NULL;
 
@@ -2988,53 +3870,23 @@ _rhioGL_command_block_chain_destroy( riGL_CommandBlock * block )
         }
 }
 
-// Move a recycled or newly allocated block into the active command stream
+// Move a recycled block from the pool into the active command stream
 static riStatus
-_rhioGL_command_allocator_obtain_block( riGL_CommandAllocator * allocator, riSize minimumCapacity )
+_rhioGL_command_allocator_obtain_block( riGL_CommandAllocator * allocator )
 {
-    riGL_CommandBlock ** cursor   = NULL;
-    riGL_CommandBlock *  block    = NULL;
-    riSize               capacity = 0u;
+    riGL_CommandBlock * block = NULL;
 
     RI_GUARD( allocator != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( allocator->freeBlocks != NULL, RI_ERROR_OUT_OF_MEMORY );
 
-    // Required Capacity Selection
-    //----------------------------------------------------------
-    capacity = allocator->blockSize;
-    if( capacity < minimumCapacity )
-        {
-            capacity = minimumCapacity;
-        }
-
-    // Free List Search
-    //----------------------------------------------------------
-    // Reuse the first free block that can fit the requested command record
-    cursor = &allocator->freeBlocks;
-    while( *cursor != NULL )
-        {
-            if( ( *cursor )->capacity >= minimumCapacity )
-                {
-                    block   = *cursor;
-                    *cursor = block->next;
+    block                 = allocator->freeBlocks;
+    allocator->freeBlocks = block->next;
 #        if defined( RHIO_DEBUG )
-                    if( allocator->freeBlockCount > 0u )
-                        {
-                            --allocator->freeBlockCount;
-                        }
-#        endif
-                    break;
-                }
-
-            cursor = &( *cursor )->next;
-        }
-
-    // Fresh Block Allocation
-    //----------------------------------------------------------
-    if( block == NULL )
+    if( allocator->freeBlockCount > 0u )
         {
-            block = _rhioGL_command_block_allocate( capacity );
-            if( block == NULL ) return RI_ERROR_OUT_OF_MEMORY;
+            --allocator->freeBlockCount;
         }
+#        endif
 
     // Active List Append
     //----------------------------------------------------------
@@ -3062,15 +3914,39 @@ _rhioGL_command_allocator_obtain_block( riGL_CommandAllocator * allocator, riSiz
 }
 
 // Initialize block-backed command memory for one GL command list
-static void
+static riStatus
 _rhioGL_command_allocator_init( riGL_CommandAllocator * allocator )
 {
     riGL_CommandAllocator emptyAllocator = RI_ZERO_INIT;
+    riGL_CommandBlock *   block          = NULL;
+    riU32                 i              = 0u;
 
-    if( allocator == NULL ) return;
+    RI_GUARD( allocator != NULL, RI_ERROR_INVALID_PARAM );
 
-    *allocator           = emptyAllocator;
-    allocator->blockSize = (riSize)RHIO_GL_COMMAND_BLOCK_SIZE;
+    *allocator                  = emptyAllocator;
+    allocator->commandsPerBlock = (riU32)RHIO_GL_COMMANDS_PER_BLOCK;
+    if( allocator->commandsPerBlock == 0u )
+        {
+            allocator->commandsPerBlock = 1u;
+        }
+
+    for( i = 0u; i < (riU32)RHIO_GL_COMMAND_BLOCK_POOL_SIZE; ++i )
+        {
+            block = _rhioGL_command_block_allocate( allocator->commandsPerBlock );
+            if( NULL == block )
+                {
+                    _rhioGL_command_allocator_destroy( allocator );
+                    return RI_ERROR_OUT_OF_MEMORY;
+                }
+
+            block->next           = allocator->freeBlocks;
+            allocator->freeBlocks = block;
+#        if defined( RHIO_DEBUG )
+            ++allocator->freeBlockCount;
+#        endif
+        }
+
+    return RI_SUCCESS;
 }
 
 // Release all command-memory blocks owned by an allocator
@@ -3091,7 +3967,8 @@ _rhioGL_command_allocator_destroy( riGL_CommandAllocator * allocator )
 static void
 _rhioGL_command_allocator_reset( riGL_CommandAllocator * allocator )
 {
-    riGL_CommandBlock * block = NULL;
+    riGL_CommandBlock * block     = NULL;
+    riGL_CommandBlock * nextBlock = NULL;
 
     if( allocator == NULL ) return;
 
@@ -3102,14 +3979,14 @@ _rhioGL_command_allocator_reset( riGL_CommandAllocator * allocator )
     block = allocator->firstBlock;
     while( block != NULL )
         {
-            block->used = 0u;
-            block       = block->next;
-        }
-
-    if( allocator->firstBlock != NULL )
-        {
-            allocator->lastBlock->next = allocator->freeBlocks;
-            allocator->freeBlocks      = allocator->firstBlock;
+            nextBlock             = block->next;
+            block->used           = 0u;
+            block->next           = allocator->freeBlocks;
+            allocator->freeBlocks = block;
+            block                 = nextBlock;
+#        if defined( RHIO_DEBUG )
+            ++allocator->freeBlockCount;
+#        endif
         }
 
     allocator->firstBlock   = NULL;
@@ -3117,66 +3994,49 @@ _rhioGL_command_allocator_reset( riGL_CommandAllocator * allocator )
     allocator->currentBlock = NULL;
 
 #        if defined( RHIO_DEBUG )
-    allocator->freeBlockCount += allocator->activeBlockCount;
     allocator->activeBlockCount = 0u;
     allocator->commandCount     = 0u;
-    allocator->bytesUsed        = 0u;
 #        endif
 }
 
-// Reserve one linearly stored command record
+// Reserve one fixed-size command record
 static riStatus
-_rhioGL_command_allocator_write( riGL_CommandAllocator * allocator, riGL_CommandType type, riSize recordSize,
-                                 riGL_CommandHeader ** outHeader )
+_rhioGL_command_allocator_write( riGL_CommandAllocator * allocator, riGL_CommandType type, riGL_Command ** outCommand )
 {
-    riGL_CommandBlock *  block             = NULL;
-    riGL_CommandHeader * header            = NULL;
-    riSize               alignedRecordSize = 0u;
-    riStatus             status            = RI_ERROR_UNKNOWN;
+    riGL_CommandBlock * block   = NULL;
+    riGL_Command *      command = NULL;
+    riStatus            status  = RI_ERROR_UNKNOWN;
 
     RI_GUARD( allocator != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outHeader != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( recordSize >= (riSize)sizeof( riGL_CommandHeader ), RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outCommand != NULL, RI_ERROR_INVALID_PARAM );
 
-    // Record Size Normalization
-    //----------------------------------------------------------
-    // Records are size-prefixed and pointer-aligned so decoding can skip unknown
-    // payloads safely once new command types are added
-    *outHeader        = NULL;
-    alignedRecordSize = _rhioGL_align_up_size( recordSize, (riSize)sizeof( riUPtr ) );
-    RI_GUARD( alignedRecordSize >= recordSize, RI_ERROR_OUT_OF_MEMORY );
-    RI_GUARD( alignedRecordSize <= (riSize)0xFFFFFFFFu, RI_ERROR_OUT_OF_MEMORY );
+    *outCommand = NULL;
 
     // Block Selection
     //----------------------------------------------------------
-    // The subtraction form avoids overflow when checking remaining block capacity
     block = allocator->currentBlock;
-    if( block == NULL || block->used > block->capacity || block->capacity - block->used < alignedRecordSize )
+    if( block == NULL || block->used >= block->capacity )
         {
-            status = _rhioGL_command_allocator_obtain_block( allocator, alignedRecordSize );
+            status = _rhioGL_command_allocator_obtain_block( allocator );
             if( RI_FAILED( status ) ) return status;
 
             block = allocator->currentBlock;
         }
 
-    // Record Header Encoding
+    // Command Encoding
     //----------------------------------------------------------
-    header = (riGL_CommandHeader *)(void *)&block->data.bytes[block->used];
-    block->used += alignedRecordSize;
-
-    header->type = (riU32)type;
-    header->size = (riU32)alignedRecordSize;
+    command       = &block->commands[block->used++];
+    command->type = (riU32)type;
 
 #        if defined( RHIO_DEBUG )
     ++allocator->commandCount;
-    allocator->bytesUsed += alignedRecordSize;
-    if( allocator->peakBytesUsed < allocator->bytesUsed )
+    if( allocator->peakCommandCount < allocator->commandCount )
         {
-            allocator->peakBytesUsed = allocator->bytesUsed;
+            allocator->peakCommandCount = allocator->commandCount;
         }
 #        endif
 
-    *outHeader = header;
+    *outCommand = command;
 
     return RI_SUCCESS;
 }
@@ -3190,27 +4050,192 @@ _rhioGL_command_list_clear_commands( riGL_CommandList * commandList )
     _rhioGL_command_allocator_reset( &commandList->commandAllocator );
 }
 
-// Append a framebuffer clear command to a GL command list
+// Append target binding
 static riStatus
-_rhioGL_append_clear_command( riGL_CommandList * commandList, const riGL_ClearCommand * clear )
+_rhioGL_append_bind_default_framebuffer_command( riGL_CommandList * commandList )
 {
-    riGL_CommandHeader *      header = NULL;
-    riGL_ClearCommandRecord * record = NULL;
-    riStatus                  status = RI_ERROR_UNKNOWN;
+    riGL_Command * command = NULL;
 
     RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( clear != NULL, RI_ERROR_INVALID_PARAM );
 
-    // Command Record Allocation
-    //----------------------------------------------------------
-    status = _rhioGL_command_allocator_write(
-        &commandList->commandAllocator, RI_GL_COMMAND_CLEAR_FRAMEBUFFER, (riSize)sizeof( *record ), &header );
+    return _rhioGL_command_allocator_write(
+        &commandList->commandAllocator, RI_GL_COMMAND_BIND_DEFAULT_FRAMEBUFFER, &command );
+}
+
+// Append viewport state
+static riStatus
+_rhioGL_append_set_viewport_command( riGL_CommandList * commandList, riU32 x, riU32 y, riU32 width, riU32 height )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_SET_VIEWPORT, &command );
     if( RI_FAILED( status ) ) return status;
 
-    // Command Payload Encoding
-    //----------------------------------------------------------
-    record        = (riGL_ClearCommandRecord *)(void *)header;
-    record->clear = *clear;
+    command->data.setRect.x      = x;
+    command->data.setRect.y      = y;
+    command->data.setRect.width  = width;
+    command->data.setRect.height = height;
+
+    return RI_SUCCESS;
+}
+
+// Append scissor rectangle state
+static riStatus
+_rhioGL_append_set_scissor_command( riGL_CommandList * commandList, riU32 x, riU32 y, riU32 width, riU32 height )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_SET_SCISSOR, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.setRect.x      = x;
+    command->data.setRect.y      = y;
+    command->data.setRect.width  = width;
+    command->data.setRect.height = height;
+
+    return RI_SUCCESS;
+}
+
+// Append scissor enable state
+static riStatus
+_rhioGL_append_set_scissor_enabled_command( riGL_CommandList * commandList, bool enabled )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write(
+        &commandList->commandAllocator, RI_GL_COMMAND_SET_SCISSOR_ENABLED, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.setEnabled.enabled = enabled ? 1u : 0u;
+
+    return RI_SUCCESS;
+}
+
+// Append clear color state
+static riStatus
+_rhioGL_append_set_clear_color_command( riGL_CommandList * commandList, const riF32 color[4] )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( color != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_SET_CLEAR_COLOR, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.setClearColor.r = color[0];
+    command->data.setClearColor.g = color[1];
+    command->data.setClearColor.b = color[2];
+    command->data.setClearColor.a = color[3];
+
+    return RI_SUCCESS;
+}
+
+// Append clear depth/stencil state
+static riStatus
+_rhioGL_append_set_clear_depth_stencil_command( riGL_CommandList * commandList, riF32 depth, riU8 stencil,
+                                                bool clearDepth, bool clearStencil )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write(
+        &commandList->commandAllocator, RI_GL_COMMAND_SET_CLEAR_DEPTH_STENCIL, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.setClearDepthStencil.depth        = depth;
+    command->data.setClearDepthStencil.stencil      = stencil;
+    command->data.setClearDepthStencil.clearDepth   = clearDepth ? 1u : 0u;
+    command->data.setClearDepthStencil.clearStencil = clearStencil ? 1u : 0u;
+
+    return RI_SUCCESS;
+}
+
+// Append framebuffer clear execution
+static riStatus
+_rhioGL_append_clear_command( riGL_CommandList * commandList, riU32 mask )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_CLEAR, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.clear.mask = mask;
+
+    return RI_SUCCESS;
+}
+
+// Append render pipeline bind
+static riStatus
+_rhioGL_append_bind_pipeline_command( riGL_CommandList * commandList, riRenderPipeline pipeline )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_BIND_PIPELINE, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.bindPipeline.pipeline = pipeline;
+
+    return RI_SUCCESS;
+}
+
+// Append shader-buffer bind
+static riStatus
+_rhioGL_append_bind_shader_buffer_command( riGL_CommandList * commandList, riU32 slot, riBuffer buffer, riU32 offset )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( buffer != NULL, RI_ERROR_INVALID_PARAM );
+
+    status
+        = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_BIND_SHADER_BUFFER, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.bindShaderBuffer.buffer = buffer;
+    command->data.bindShaderBuffer.offset = offset;
+    command->data.bindShaderBuffer.slot   = slot;
+
+    return RI_SUCCESS;
+}
+
+// Append non-indexed draw
+static riStatus
+_rhioGL_append_draw_command( riGL_CommandList * commandList, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                             riU32 firstInstance )
+{
+    riGL_Command * command = NULL;
+    riStatus       status  = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioGL_command_allocator_write( &commandList->commandAllocator, RI_GL_COMMAND_DRAW, &command );
+    if( RI_FAILED( status ) ) return status;
+
+    command->data.draw.vertexCount   = vertexCount;
+    command->data.draw.instanceCount = instanceCount;
+    command->data.draw.firstVertex   = firstVertex;
+    command->data.draw.firstInstance = firstInstance;
 
     return RI_SUCCESS;
 }
@@ -3223,52 +4248,124 @@ _rhioGL_append_clear_command( riGL_CommandList * commandList, const riGL_ClearCo
 static riStatus
 _rhioGL_execute_command_list( riGL_CommandList * commandList )
 {
-    const riGL_CommandBlock *       block        = NULL;
-    const riGL_CommandHeader *      header       = NULL;
-    const riGL_ClearCommandRecord * clear        = NULL;
-    riSize                          offset       = 0u;
-    riSize                          commandSize  = 0u;
-    riSize                          expectedSize = 0u;
-    riStatus                        status       = RI_ERROR_UNKNOWN;
+    riGL_CommandQueue *       glQueue                                              = NULL;
+    riGL_Device *             glDevice                                             = NULL;
+    const riGL_CommandBlock * block                                                = NULL;
+    const riGL_Command *      command                                              = NULL;
+    riGL_RenderPipeline *     pipeline                                             = NULL;
+    riGL_Buffer *             shaderBuffers[RHIO_MAX_SHADER_BUFFER_BINDINGS]       = RI_ZERO_INIT;
+    riU32                     shaderBufferOffsets[RHIO_MAX_SHADER_BUFFER_BINDINGS] = RI_ZERO_INIT;
+    riU32                     i                                                    = 0u;
+    riStatus                  status                                               = RI_ERROR_UNKNOWN;
 
     RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList->queue != NULL, RI_ERROR_INVALID_STATE );
+
+    glQueue  = (riGL_CommandQueue *)commandList->queue;
+    glDevice = glQueue->device;
+    RI_GUARD( glDevice != NULL, RI_ERROR_INVALID_STATE );
+
+#        if defined( RHIO_GL_HAS_VERTEX_ARRAY_OBJECT )
+    if( glDevice->defaultVertexArray != 0u )
+        {
+            glBindVertexArray( glDevice->defaultVertexArray );
+        }
+#        endif
 
     // Command Stream Decode
     //----------------------------------------------------------
-    // Every record begins with riGL_CommandHeader. The stored size is trusted only
-    // after checking it stays inside the current memory block
     block = commandList->commandAllocator.firstBlock;
     while( block != NULL )
         {
-            offset = 0u;
-            while( offset < block->used )
+            for( i = 0u; i < block->used; ++i )
                 {
-                    RI_GUARD( block->used - offset >= (riSize)sizeof( riGL_CommandHeader ), RI_ERROR_INVALID_STATE );
+                    command = &block->commands[i];
 
-                    header      = (const riGL_CommandHeader *)(const void *)&block->data.bytes[offset];
-                    commandSize = (riSize)header->size;
-
-                    RI_GUARD( commandSize >= (riSize)sizeof( riGL_CommandHeader ), RI_ERROR_INVALID_STATE );
-                    RI_GUARD( commandSize <= block->used - offset, RI_ERROR_INVALID_STATE );
-
-                    switch( (riGL_CommandType)header->type )
+                    switch( (riGL_CommandType)command->type )
                         {
-                        case RI_GL_COMMAND_CLEAR_FRAMEBUFFER:
-                            // Clear Payload Validation
-                            //----------------------------------------------------------
-                            expectedSize = _rhioGL_align_up_size( (riSize)sizeof( *clear ), (riSize)sizeof( riUPtr ) );
-                            RI_GUARD( expectedSize != 0u, RI_ERROR_INVALID_STATE );
-                            RI_GUARD( commandSize >= expectedSize, RI_ERROR_INVALID_STATE );
+                        case RI_GL_COMMAND_BIND_DEFAULT_FRAMEBUFFER: _rhioGL_bind_default_framebuffer(); break;
 
-                            clear  = (const riGL_ClearCommandRecord *)(const void *)header;
-                            status = _rhioGL_execute_clear_command( &clear->clear );
+                        case RI_GL_COMMAND_SET_VIEWPORT:
+                            glViewport( (GLint)command->data.setRect.x,
+                                        (GLint)command->data.setRect.y,
+                                        (GLsizei)command->data.setRect.width,
+                                        (GLsizei)command->data.setRect.height );
+                            break;
+
+                        case RI_GL_COMMAND_SET_SCISSOR:
+                            glScissor( (GLint)command->data.setRect.x,
+                                       (GLint)command->data.setRect.y,
+                                       (GLsizei)command->data.setRect.width,
+                                       (GLsizei)command->data.setRect.height );
+                            break;
+
+                        case RI_GL_COMMAND_SET_SCISSOR_ENABLED:
+                            if( command->data.setEnabled.enabled )
+                                {
+                                    glEnable( GL_SCISSOR_TEST );
+                                }
+                            else
+                                {
+                                    glDisable( GL_SCISSOR_TEST );
+                                }
+                            break;
+
+                        case RI_GL_COMMAND_SET_CLEAR_COLOR:
+                            glClearColor( command->data.setClearColor.r,
+                                          command->data.setClearColor.g,
+                                          command->data.setClearColor.b,
+                                          command->data.setClearColor.a );
+                            break;
+
+                        case RI_GL_COMMAND_SET_CLEAR_DEPTH_STENCIL:
+                            if( command->data.setClearDepthStencil.clearDepth )
+                                {
+                                    glDepthMask( GL_TRUE );
+                                    glClearDepth( command->data.setClearDepthStencil.depth );
+                                }
+
+                            if( command->data.setClearDepthStencil.clearStencil )
+                                {
+                                    glStencilMask( 0xFFFFFFFFu );
+                                    glClearStencil( (GLint)command->data.setClearDepthStencil.stencil );
+                                }
+                            break;
+
+                        case RI_GL_COMMAND_CLEAR:
+                            glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+                            glClear( (GLbitfield)command->data.clear.mask );
+                            break;
+
+                        case RI_GL_COMMAND_BIND_PIPELINE:
+                            pipeline = (riGL_RenderPipeline *)command->data.bindPipeline.pipeline;
+                            if( pipeline == NULL )
+                                {
+                                    return RI_ERROR_INVALID_STATE;
+                                }
+                            status = _rhioGL_apply_pipeline_state( pipeline );
+                            if( RI_FAILED( status ) ) return status;
+                            glUseProgram( pipeline->program );
+                            break;
+
+                        case RI_GL_COMMAND_BIND_SHADER_BUFFER:
+                            if( command->data.bindShaderBuffer.slot >= RHIO_MAX_SHADER_BUFFER_BINDINGS )
+                                {
+                                    return RI_ERROR_INVALID_STATE;
+                                }
+                            shaderBuffers[command->data.bindShaderBuffer.slot]
+                                = (riGL_Buffer *)command->data.bindShaderBuffer.buffer;
+                            shaderBufferOffsets[command->data.bindShaderBuffer.slot]
+                                = command->data.bindShaderBuffer.offset;
+                            break;
+
+                        case RI_GL_COMMAND_DRAW:
+                            status
+                                = _rhioGL_execute_draw_command( command, pipeline, shaderBuffers, shaderBufferOffsets );
                             if( RI_FAILED( status ) ) return status;
                             break;
 
                         default: return RI_ERROR_INVALID_STATE;
                         }
-
-                    offset += commandSize;
                 }
 
             block = block->next;
@@ -3277,115 +4374,507 @@ _rhioGL_execute_command_list( riGL_CommandList * commandList )
     return RI_SUCCESS;
 }
 
-// Execute one framebuffer clear command
+// Execute one non-indexed draw
 static riStatus
-_rhioGL_execute_clear_command( const riGL_ClearCommand * clear )
+_rhioGL_execute_draw_command( const riGL_Command * command, riGL_RenderPipeline * pipeline,
+                              riGL_Buffer * shaderBuffers[RHIO_MAX_SHADER_BUFFER_BINDINGS],
+                              const riU32   shaderBufferOffsets[RHIO_MAX_SHADER_BUFFER_BINDINGS] )
 {
-    GLboolean restoreScissorEnabled = GL_FALSE;
-    GLint     restoreScissorBox[4]  = { 0, 0, 0, 0 };
+    riGL_Buffer * buffer       = NULL;
+    riSize        bufferOffset = 0u;
+    riSize        range        = 0u;
+    riSize        requiredSize = (riSize)RHIO_GL_TRIANGLE_VERTEX_COUNT * (riSize)sizeof( riF32 ) * 8u;
 
-    GLboolean restoreColorMask[4]   = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
-    GLboolean restoreDepthMask      = GL_TRUE;
-    GLint     restoreStencilMask    = 0;
+    RI_GUARD( command != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( shaderBuffers != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( shaderBufferOffsets != NULL, RI_ERROR_INVALID_PARAM );
 
-    if( NULL == clear || clear->mask == 0u ) return RI_SUCCESS;
+#        if !defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    return RI_ERROR_BACKEND_UNAVAIL;
+#        else
+    buffer       = shaderBuffers[RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING];
+    bufferOffset = (riSize)shaderBufferOffsets[RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING];
 
-    // Framebuffer Binding
-    //----------------------------------------------------------
-    _rhioGL_bind_default_framebuffer();
+    RI_GUARD( buffer != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( bufferOffset <= buffer->info.size, RI_ERROR_INVALID_STATE );
+    RI_GUARD( requiredSize <= buffer->info.size - bufferOffset, RI_ERROR_INVALID_STATE );
 
-    // Scissor State Setup
-    //----------------------------------------------------------
-    // Render-pass clear rectangles are implemented with GL scissor. Existing
-    // scissor state is restored after glClear so callers keep ownership of state
-    if( clear->useScissor )
-        {
-            restoreScissorEnabled = glIsEnabled( GL_SCISSOR_TEST );
-            glGetIntegerv( GL_SCISSOR_BOX, restoreScissorBox );
+    range = buffer->info.size - bufferOffset;
+    glBindBufferRange( GL_UNIFORM_BUFFER,
+                       (GLuint)RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING,
+                       buffer->buffer,
+                       (GLintptr)bufferOffset,
+                       (GLsizeiptr)range );
 
-            glEnable( GL_SCISSOR_TEST );
-            glScissor( clear->scissorX, clear->scissorY, clear->scissorWidth, clear->scissorHeight );
-        }
-
-    // Clear Write-Mask Setup
-    //----------------------------------------------------------
-    // glClear obeys color/depth/stencil write masks. Temporarily force enabled
-    // masks for attachments requested by the render pass, then restore below
-    if( clear->hasColor )
-        {
-            glGetBooleanv( GL_COLOR_WRITEMASK, restoreColorMask );
-            glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-            glClearColor( clear->color[0], clear->color[1], clear->color[2], clear->color[3] );
-        }
-
-    if( clear->hasDepth )
-        {
-            glGetBooleanv( GL_DEPTH_WRITEMASK, &restoreDepthMask );
-            glDepthMask( GL_TRUE );
-            glClearDepth( clear->depth );
-        }
-
-    if( clear->hasStencil )
-        {
-            glGetIntegerv( GL_STENCIL_WRITEMASK, &restoreStencilMask );
-            glStencilMask( 0xFFFFFFFFu );
-            glClearStencil( (GLint)clear->stencil );
-        }
-
-    // Clear Execution
-    //----------------------------------------------------------
-    glClear( clear->mask );
-
-    // Clear State Restore
-    //----------------------------------------------------------
-    if( clear->hasStencil )
-        {
-            glStencilMask( (GLuint)restoreStencilMask );
-        }
-
-    if( clear->hasDepth )
-        {
-            glDepthMask( restoreDepthMask );
-        }
-
-    if( clear->hasColor )
-        {
-            glColorMask( restoreColorMask[0], restoreColorMask[1], restoreColorMask[2], restoreColorMask[3] );
-        }
-
-    if( clear->useScissor )
-        {
-            glScissor( restoreScissorBox[0], restoreScissorBox[1], restoreScissorBox[2], restoreScissorBox[3] );
-
-            if( restoreScissorEnabled )
-                {
-                    glEnable( GL_SCISSOR_TEST );
-                }
-            else
-                {
-                    glDisable( GL_SCISSOR_TEST );
-                }
-        }
+    glDrawArrays( pipeline->primitive, (GLint)command->data.draw.firstVertex, (GLsizei)command->data.draw.vertexCount );
 
     return RI_SUCCESS;
+#        endif
 }
 
 // Bind the OpenGL default framebuffer
 static void
 _rhioGL_bind_default_framebuffer( void )
 {
-#        if defined( RHIO_GL_NEEDS_FRAMEBUFFER_BIND_LOADER )
-    // Desktop GL loader path
-    //----------------------------------------------------------
-    if( rhio_glBindFramebufferProc != NULL )
-        {
-            rhio_glBindFramebufferProc( GL_FRAMEBUFFER, 0u );
-        }
-#        else
-    // Direct GL/GLES path
-    //----------------------------------------------------------
     glBindFramebuffer( GL_FRAMEBUFFER, 0u );
+}
+
+// Initialize desktop GL entry points through GLEW; GLES and Apple builds link symbols directly
+static riStatus
+_rhioGL_load_entrypoints( void )
+{
+#        if defined( RHIO_GL_USE_GLEW )
+    GLenum glewStatus = GLEW_OK;
+
+    glewExperimental  = GL_TRUE;
+    glewStatus        = glewInit();
+    if( RI_UNLIKELY( glewStatus != GLEW_OK ) )
+        {
+            TRACELOG( RI_LOG_ERROR,
+                      "BACKEND GL: Failed to initialize GLEW: %s",
+                      (const char *)glewGetErrorString( glewStatus ) );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    UNUSED( glGetError() );
 #        endif
+
+    return RI_SUCCESS;
+}
+
+// Compile one GLSL shader stage
+static riStatus
+_rhioGL_compile_shader( GLenum shaderType, const char * source, GLuint * outShader )
+{
+    GLuint shader = 0u;
+    GLint  status = GL_FALSE;
+    char   infoLog[1024];
+
+    RI_GUARD( source != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outShader != NULL, RI_ERROR_INVALID_PARAM );
+
+    *outShader = 0u;
+
+    shader     = glCreateShader( shaderType );
+    if( 0u == shader ) return RI_ERROR_SHADER_COMPILE;
+
+    glShaderSource( shader, 1, &source, NULL );
+    glCompileShader( shader );
+    glGetShaderiv( shader, GL_COMPILE_STATUS, &status );
+    if( status != GL_TRUE )
+        {
+            infoLog[0] = '\0';
+            glGetShaderInfoLog( shader, (GLsizei)sizeof( infoLog ), NULL, infoLog );
+            TRACELOG( RI_LOG_ERROR, "BACKEND GL: Shader compile failed: %s", infoLog );
+            glDeleteShader( shader );
+            return RI_ERROR_SHADER_COMPILE;
+        }
+
+    *outShader = shader;
+
+    return RI_SUCCESS;
+}
+
+// Link the hardcoded passthrough shader used by the minimal triangle pipeline
+static riStatus
+_rhioGL_create_builtin_program( GLuint * outProgram )
+{
+#        if !defined( RHIO_GL_HAS_UNIFORM_BUFFER_VERTEX_PULLING )
+    UNUSED( outProgram );
+    return RI_ERROR_BACKEND_UNAVAIL;
+#        elif defined( RHIO_BACKEND_OPENGLES3 )
+    static const char * vertexSource   = "#version 300 es\n"
+                                         "precision mediump float;\n"
+                                         "struct RhioVertex {\n"
+                                         "    vec4 position;\n"
+                                         "    vec4 color;\n"
+                                         "};\n"
+                                         "layout(std140) uniform RhioTriangleVertices {\n"
+                                         "    RhioVertex rhio_vertices[3];\n"
+                                         "};\n"
+                                         "out vec4 v_color;\n"
+                                         "void main(void) {\n"
+                                         "    RhioVertex v = rhio_vertices[gl_VertexID];\n"
+                                         "    gl_Position = vec4(v.position.xy, 0.0, 1.0);\n"
+                                         "    v_color = v.color;\n"
+                                         "}\n";
+    static const char * fragmentSource = "#version 300 es\n"
+                                         "precision mediump float;\n"
+                                         "in vec4 v_color;\n"
+                                         "out vec4 rhio_frag_color;\n"
+                                         "void main(void) {\n"
+                                         "    rhio_frag_color = v_color;\n"
+                                         "}\n";
+#        else
+    static const char * vertexSource   = "#version 330 core\n"
+                                         "struct RhioVertex {\n"
+                                         "    vec4 position;\n"
+                                         "    vec4 color;\n"
+                                         "};\n"
+                                         "layout(std140) uniform RhioTriangleVertices {\n"
+                                         "    RhioVertex rhio_vertices[3];\n"
+                                         "};\n"
+                                         "out vec4 v_color;\n"
+                                         "void main(void) {\n"
+                                         "    RhioVertex v = rhio_vertices[gl_VertexID];\n"
+                                         "    gl_Position = vec4(v.position.xy, 0.0, 1.0);\n"
+                                         "    v_color = v.color;\n"
+                                         "}\n";
+    static const char * fragmentSource = "#version 330 core\n"
+                                         "in vec4 v_color;\n"
+                                         "out vec4 rhio_frag_color;\n"
+                                         "void main(void) {\n"
+                                         "    rhio_frag_color = v_color;\n"
+                                         "}\n";
+#        endif
+
+    GLuint   vertexShader   = 0u;
+    GLuint   fragmentShader = 0u;
+    GLuint   program        = 0u;
+    GLuint   blockIndex     = GL_INVALID_INDEX;
+    GLint    linkStatus     = GL_FALSE;
+    riStatus status         = RI_ERROR_UNKNOWN;
+    char     infoLog[1024];
+
+    RI_GUARD( outProgram != NULL, RI_ERROR_INVALID_PARAM );
+    *outProgram = 0u;
+
+    status      = _rhioGL_compile_shader( GL_VERTEX_SHADER, vertexSource, &vertexShader );
+    if( RI_FAILED( status ) ) return status;
+
+    status = _rhioGL_compile_shader( GL_FRAGMENT_SHADER, fragmentSource, &fragmentShader );
+    if( RI_FAILED( status ) )
+        {
+            glDeleteShader( vertexShader );
+            return status;
+        }
+
+    program = glCreateProgram();
+    if( program == 0u )
+        {
+            glDeleteShader( vertexShader );
+            glDeleteShader( fragmentShader );
+            return RI_ERROR_SHADER_COMPILE;
+        }
+
+    glAttachShader( program, vertexShader );
+    glAttachShader( program, fragmentShader );
+    glLinkProgram( program );
+
+    glDeleteShader( vertexShader );
+    glDeleteShader( fragmentShader );
+
+    glGetProgramiv( program, GL_LINK_STATUS, &linkStatus );
+    if( linkStatus != GL_TRUE )
+        {
+            infoLog[0] = '\0';
+            glGetProgramInfoLog( program, (GLsizei)sizeof( infoLog ), NULL, infoLog );
+            TRACELOG( RI_LOG_ERROR, "BACKEND GL: Program link failed: %s", infoLog );
+            glDeleteProgram( program );
+            return RI_ERROR_SHADER_COMPILE;
+        }
+
+    blockIndex = glGetUniformBlockIndex( program, "RhioTriangleVertices" );
+    if( blockIndex == GL_INVALID_INDEX )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND GL: Builtin triangle uniform block was optimized out or not found" );
+            glDeleteProgram( program );
+            return RI_ERROR_SHADER_COMPILE;
+        }
+
+    glUniformBlockBinding( program, blockIndex, (GLuint)RHIO_GL_TRIANGLE_VERTEX_PULL_BINDING );
+
+    *outProgram = program;
+
+    return RI_SUCCESS;
+}
+
+// Validate the public render-pipeline descriptor against the current GL backend surface
+static riStatus
+_rhioGL_validate_render_pipeline_info( const riRenderPipelineInfo * info )
+{
+    GLenum   ignored = 0u;
+    riStatus status  = RI_SUCCESS;
+    riU32    i       = 0u;
+
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->supportsIndirectCommands <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthClampEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->stencilTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->stencilWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderTargetCount <= RHIO_MAX_COLOR_ATTACHMENTS, RI_ERROR_INVALID_PARAM );
+
+    RI_GUARD( info->supportsIndirectCommands == 0u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->vertexShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->fragmentShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->meshShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->taskShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    TRY_CONVERT( _rhioGL_topology_to_gl, info->topology, &ignored );
+
+    switch( info->fillMode )
+        {
+        case RI_PIPELINE_FILL_MODE_SOLID: break;
+        case RI_PIPELINE_FILL_MODE_WIREFRAME:
+#        if !defined( RHIO_GL_BACKEND_DESKTOP )
+            return RI_ERROR_BACKEND_UNAVAIL;
+#        else
+            break;
+#        endif
+        default: return RI_ERROR_INVALID_PARAM;
+        }
+
+    switch( info->cullMode )
+        {
+        case RI_PIPELINE_CULL_MODE_NONE:
+        case RI_PIPELINE_CULL_MODE_FRONT:
+        case RI_PIPELINE_CULL_MODE_BACK:  break;
+        default:                          return RI_ERROR_INVALID_PARAM;
+        }
+
+    switch( info->frontFace )
+        {
+        case RI_PIPELINE_FRONT_FACE_COUNTER_CLOCKWISE:
+        case RI_PIPELINE_FRONT_FACE_CLOCKWISE:         break;
+        default:                                       return RI_ERROR_INVALID_PARAM;
+        }
+
+    TRY_CONVERT( _rhioGL_compare_operation_to_gl, info->depthCompareOp, &ignored );
+    TRY_CONVERT( _rhioGL_compare_operation_to_gl, info->stencilCompareOp, &ignored );
+
+    if( info->depthClampEnable != 0u )
+        {
+#        if !defined( RHIO_GL_BACKEND_DESKTOP )
+            return RI_ERROR_BACKEND_UNAVAIL;
+#        endif
+        }
+
+    if( info->depthStencilFormat
+        != RHIO_TEXTURE_FORMAT_UNDEFINED
+        && info->depthStencilFormat
+        != RHIO_TEXTURE_FORMAT_D24_UNORM_S8_UINT
+        && info->depthStencilFormat
+        != RHIO_TEXTURE_FORMAT_D32_FLOAT_S8_UINT )
+        {
+            return RI_ERROR_INVALID_PARAM;
+        }
+
+    for( i = 0u; i < info->renderTargetCount; ++i )
+        {
+            RI_GUARD( info->blendEnable[i] <= 1u, RI_ERROR_INVALID_PARAM );
+            RI_GUARD( info->renderTargetFormats[i] != RHIO_TEXTURE_FORMAT_UNDEFINED, RI_ERROR_INVALID_PARAM );
+
+            RI_GUARD( info->renderTargetFormats[i] != RHIO_TEXTURE_FORMAT_D24_UNORM_S8_UINT, RI_ERROR_INVALID_PARAM );
+            RI_GUARD( info->renderTargetFormats[i] != RHIO_TEXTURE_FORMAT_D32_FLOAT_S8_UINT, RI_ERROR_INVALID_PARAM );
+
+            if( i > 0u && info->blendEnable[i] != 0u ) return RI_ERROR_BACKEND_UNAVAIL;
+
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendSrcRgbFactor[i], &ignored );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendDstRgbFactor[i], &ignored );
+            TRY_CONVERT( _rhioGL_blend_operation_to_gl, info->blendRgbOp[i], &ignored );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendSrcAlphaFactor[i], &ignored );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendDstAlphaFactor[i], &ignored );
+            TRY_CONVERT( _rhioGL_blend_operation_to_gl, info->blendAlphaOp[i], &ignored );
+        }
+
+    return RI_SUCCESS;
+}
+
+// Apply the GL-representable subset of the render-pipeline state at command execution time
+static riStatus
+_rhioGL_apply_pipeline_state( const riGL_RenderPipeline * pipeline )
+{
+    const riRenderPipelineInfo * info        = NULL;
+    GLenum                       compareOp   = GL_ALWAYS;
+    GLenum                       blendSrcRgb = GL_ONE;
+    GLenum                       blendDstRgb = GL_ZERO;
+    GLenum                       blendRgbOp  = GL_FUNC_ADD;
+    GLenum                       blendSrcA   = GL_ONE;
+    GLenum                       blendDstA   = GL_ZERO;
+    GLenum                       blendAOp    = GL_FUNC_ADD;
+    riStatus                     status      = RI_SUCCESS;
+
+    RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
+
+    info = &pipeline->info;
+
+    switch( info->fillMode )
+        {
+        case RI_PIPELINE_FILL_MODE_SOLID:
+#        if defined( RHIO_GL_BACKEND_DESKTOP )
+            glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
+#        endif
+            break;
+        case RI_PIPELINE_FILL_MODE_WIREFRAME:
+#        if defined( RHIO_GL_BACKEND_DESKTOP )
+            glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
+            break;
+#        else
+            return RI_ERROR_BACKEND_UNAVAIL;
+#        endif
+        default: return RI_ERROR_INVALID_STATE;
+        }
+
+    switch( info->cullMode )
+        {
+        case RI_PIPELINE_CULL_MODE_NONE: glDisable( GL_CULL_FACE ); break;
+        case RI_PIPELINE_CULL_MODE_FRONT:
+            glEnable( GL_CULL_FACE );
+            glCullFace( GL_FRONT );
+            break;
+        case RI_PIPELINE_CULL_MODE_BACK:
+            glEnable( GL_CULL_FACE );
+            glCullFace( GL_BACK );
+            break;
+        default: return RI_ERROR_INVALID_STATE;
+        }
+
+    switch( info->frontFace )
+        {
+        case RI_PIPELINE_FRONT_FACE_COUNTER_CLOCKWISE: glFrontFace( GL_CCW ); break;
+        case RI_PIPELINE_FRONT_FACE_CLOCKWISE:         glFrontFace( GL_CW ); break;
+        default:                                       return RI_ERROR_INVALID_STATE;
+        }
+
+    if( info->depthTestEnable != 0u )
+        {
+            TRY_CONVERT( _rhioGL_compare_operation_to_gl, info->depthCompareOp, &compareOp );
+            glEnable( GL_DEPTH_TEST );
+            glDepthFunc( compareOp );
+        }
+    else
+        {
+            glDisable( GL_DEPTH_TEST );
+        }
+
+    glDepthMask( info->depthWriteEnable != 0u ? GL_TRUE : GL_FALSE );
+
+    if( info->depthClampEnable != 0u )
+        {
+#        if defined( RHIO_GL_BACKEND_DESKTOP )
+            glEnable( GL_DEPTH_CLAMP );
+#        else
+            return RI_ERROR_BACKEND_UNAVAIL;
+#        endif
+        }
+    else
+        {
+#        if defined( RHIO_GL_BACKEND_DESKTOP )
+            glDisable( GL_DEPTH_CLAMP );
+#        endif
+        }
+
+    if( info->stencilTestEnable != 0u )
+        {
+            TRY_CONVERT( _rhioGL_compare_operation_to_gl, info->stencilCompareOp, &compareOp );
+            glEnable( GL_STENCIL_TEST );
+            glStencilFunc( compareOp, 0, 0xFFFFFFFFu );
+        }
+    else
+        {
+            glDisable( GL_STENCIL_TEST );
+        }
+
+    glStencilMask( info->stencilWriteEnable != 0u ? 0xFFFFFFFFu : 0u );
+
+    if( info->renderTargetCount > 0u && info->blendEnable[0] != 0u )
+        {
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendSrcRgbFactor[0], &blendSrcRgb );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendDstRgbFactor[0], &blendDstRgb );
+            TRY_CONVERT( _rhioGL_blend_operation_to_gl, info->blendRgbOp[0], &blendRgbOp );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendSrcAlphaFactor[0], &blendSrcA );
+            TRY_CONVERT( _rhioGL_blend_factor_to_gl, info->blendDstAlphaFactor[0], &blendDstA );
+            TRY_CONVERT( _rhioGL_blend_operation_to_gl, info->blendAlphaOp[0], &blendAOp );
+
+            glEnable( GL_BLEND );
+            glBlendFuncSeparate( blendSrcRgb, blendDstRgb, blendSrcA, blendDstA );
+            glBlendEquationSeparate( blendRgbOp, blendAOp );
+        }
+    else
+        {
+            glDisable( GL_BLEND );
+        }
+
+    return RI_SUCCESS;
+}
+
+// Map public topology to GL topology
+static riStatus
+_rhioGL_topology_to_gl( riPipelineTopology topology, GLenum * outTopology )
+{
+    RI_GUARD( outTopology != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( topology )
+        {
+        case RI_PIPELINE_TOPOLOGY_TRIANGLE_LIST: *outTopology = GL_TRIANGLES; return RI_SUCCESS;
+        case RI_PIPELINE_TOPOLOGY_LINE_LIST:     *outTopology = GL_LINES; return RI_SUCCESS;
+        case RI_PIPELINE_TOPOLOGY_POINT_LIST:    *outTopology = GL_POINTS; return RI_SUCCESS;
+        default:                                 return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public compare operation to GL compare operation
+static riStatus
+_rhioGL_compare_operation_to_gl( riCompareOperation operation, GLenum * outOperation )
+{
+    RI_GUARD( outOperation != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( operation )
+        {
+        case RI_COMPARE_OPERATION_NEVER:         *outOperation = GL_NEVER; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_LESS:          *outOperation = GL_LESS; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_EQUAL:         *outOperation = GL_EQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_LESS_EQUAL:    *outOperation = GL_LEQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_GREATER:       *outOperation = GL_GREATER; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_NOT_EQUAL:     *outOperation = GL_NOTEQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_GREATER_EQUAL: *outOperation = GL_GEQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_ALWAYS:        *outOperation = GL_ALWAYS; return RI_SUCCESS;
+        default:                                 return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public blend factor to GL blend factor
+static riStatus
+_rhioGL_blend_factor_to_gl( riBlendFactor factor, GLenum * outFactor )
+{
+    RI_GUARD( outFactor != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( factor )
+        {
+        case RI_BLEND_FACTOR_ZERO:                *outFactor = GL_ZERO; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE:                 *outFactor = GL_ONE; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_COLOR:           *outFactor = GL_SRC_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_SRC_COLOR: *outFactor = GL_ONE_MINUS_SRC_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_DST_COLOR:           *outFactor = GL_DST_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_DST_COLOR: *outFactor = GL_ONE_MINUS_DST_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_ALPHA:           *outFactor = GL_SRC_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA: *outFactor = GL_ONE_MINUS_SRC_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_DST_ALPHA:           *outFactor = GL_DST_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_DST_ALPHA: *outFactor = GL_ONE_MINUS_DST_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_ALPHA_SATURATE:  *outFactor = GL_SRC_ALPHA_SATURATE; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_BLEND_COLOR:         *outFactor = GL_CONSTANT_COLOR; return RI_SUCCESS;
+        default:                                  return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public blend operation to GL blend operation
+static riStatus
+_rhioGL_blend_operation_to_gl( riBlendOperation operation, GLenum * outOperation )
+{
+    RI_GUARD( outOperation != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( operation )
+        {
+        case RI_BLEND_OPERATION_ADD:              *outOperation = GL_FUNC_ADD; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_SUBTRACT:         *outOperation = GL_FUNC_SUBTRACT; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_REVERSE_SUBTRACT: *outOperation = GL_FUNC_REVERSE_SUBTRACT; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_MIN:              *outOperation = GL_MIN; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_MAX:              *outOperation = GL_MAX; return RI_SUCCESS;
+        default:                                  return RI_ERROR_INVALID_PARAM;
+        }
 }
 
 // Populate the backend descriptor with OpenGL implementations
@@ -3560,6 +5049,18 @@ _rhioValidateSwapchainVTable( const riSwapchainVTable * vtable )
     return RI_SUCCESS;
 }
 
+// Ensure a buffer exposes callbacks required by the public buffer API
+static riStatus
+_rhioValidateBufferVTable( const riBufferVTable * vtable )
+{
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
+
+    RI_GUARD_VTABLE( destroy_buffer );
+    RI_GUARD_VTABLE( get_buffer_info );
+
+    return RI_SUCCESS;
+}
+
 // Ensure a texture view exposes callbacks required by the public texture-view API
 static riStatus
 _rhioValidateTextureViewVTable( const riTextureViewVTable * vtable )
@@ -3568,6 +5069,18 @@ _rhioValidateTextureViewVTable( const riTextureViewVTable * vtable )
 
     RI_GUARD_VTABLE( destroy_texture_view );
     RI_GUARD_VTABLE( get_texture_view_info );
+
+    return RI_SUCCESS;
+}
+
+// Ensure a render pipeline exposes callbacks required by the public pipeline API
+static riStatus
+_rhioValidateRenderPipelineVTable( const riRenderPipelineVTable * vtable )
+{
+    RI_GUARD( vtable != NULL, RI_ERROR_INVALID_STATE );
+
+    RI_GUARD_VTABLE( destroy_render_pipeline );
+    RI_GUARD_VTABLE( get_render_pipeline_info );
 
     return RI_SUCCESS;
 }
