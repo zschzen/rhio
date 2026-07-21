@@ -12,6 +12,9 @@
 
 #include "rhio.h"
 
+#if !defined( GLFW_INCLUDE_NONE )
+#    define GLFW_INCLUDE_NONE
+#endif
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
@@ -127,10 +130,19 @@ BeginWindowFrame()
 void
 EndWindowFrame()
 {
-#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
-    glfwSwapBuffers( windowState.handle );
-#endif
+    // NOTE: Presentation is driven by rhioSwapchainPresent().
 }
+
+#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
+void
+PresentWindow()
+{
+    if( windowState.handle != nullptr )
+        {
+            glfwSwapBuffers( windowState.handle );
+        }
+}
+#endif
 
 void
 SetWindowResizeCallback( WindowResizeCallback callback )

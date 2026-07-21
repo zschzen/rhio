@@ -66,6 +66,18 @@ CPMDeclarePackage(GLFW
     "GLFW_INSTALL ON"
 )
 
+# GLEW
+CPMDeclarePackage(glew
+  NAME glew
+  GIT_TAG glew-cmake-2.2.0
+  GITHUB_REPOSITORY Perlmint/glew-cmake
+  OPTIONS
+    "glew-cmake_BUILD_SHARED OFF"
+    "glew-cmake_BUILD_STATIC ON"
+    "ONLY_LIBS ON"
+    "USE_GLU OFF"
+)
+
 # Volk
 CPMDeclarePackage(volk
   NAME volk

@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.26..4.3 FATAL_ERROR)
 project(
   rhio
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION "Single-file header-only C99 RHI"
   LANGUAGES C
   HOMEPAGE_URL "https://github.com/zschzen/rhio"
@@ -121,10 +121,19 @@ target_compile_definitions(
 set(RHIO_BACKEND_LIBRARIES "")
 set(RHIO_PACKAGE_DEPENDENCIES "")
 
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT ANDROID)
   if(RHIO_BACKEND_OPENGL)
     find_package(OpenGL REQUIRED)
     list(APPEND RHIO_BACKEND_LIBRARIES OpenGL::GL)
+    list(APPEND RHIO_PACKAGE_DEPENDENCIES "OpenGL")
+
+    if(NOT APPLE)
+      include(cmake/deps/glew.cmake)
+      list(APPEND RHIO_BACKEND_LIBRARIES ${RHIO_GLEW_TARGET})
+      if(RHIO_GLEW_FROM_SYSTEM)
+        list(APPEND RHIO_PACKAGE_DEPENDENCIES "GLEW")
+      endif()
+    endif()
   endif()
 
   if(RHIO_BACKEND_VULKAN)
