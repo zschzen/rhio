@@ -5199,6 +5199,8 @@ static VkBool32 _rhioVK_debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT s
                                         const VkDebugUtilsMessengerCallbackDataEXT * data, void * userData );
 static void     _rhioVK_set_object_name( riVK_Device * vkDevice, VkObjectType type, riU64 handle,
                                          const char * name );
+static riStatus _rhioVK_create_instance( riVK_Device * vkDevice, const riInstanceInfo * instanceInfo,
+                                         const char * appName, riFlags flags );
 static riStatus _rhioVK_pick_physical( riVK_Device * vkDevice );
 static riStatus _rhioVK_create_logical( riVK_Device * vkDevice );
 
@@ -5599,6 +5601,7 @@ _rhioVK_create_logical( riVK_Device * vkDevice )
     VkResult                            result        = VK_SUCCESS;
     riU32                               i             = 0u;
     VmaAllocatorCreateInfo              allocatorInfo = RI_ZERO_INIT;
+    VmaVulkanFunctions                  vulkanFunctions = RI_ZERO_INIT;
     VkCommandBufferAllocateInfo         bufferInfo    = RI_ZERO_INIT;
 
     RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
@@ -5671,6 +5674,16 @@ _rhioVK_create_logical( riVK_Device * vkDevice )
     allocatorInfo.physicalDevice    = vkDevice->physicalDevice;
     allocatorInfo.device            = vkDevice->device;
     allocatorInfo.vulkanApiVersion  = vkDevice->maxApiVersion;
+    allocatorInfo.pVulkanFunctions  = &vulkanFunctions;
+
+    // NOTE: VMA_DYNAMIC_VULKAN_FUNCTIONS requires explicit function pointers
+    // because rhio never links the Vulkan loader; volk supplies them
+    result = vmaImportVulkanFunctionsFromVolk( &allocatorInfo, &vulkanFunctions );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vmaImportVulkanFunctionsFromVolk failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
 
     result = vmaCreateAllocator( &allocatorInfo, &vkDevice->allocator );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
@@ -5777,29 +5790,26 @@ _rhioVK_create_command_queue( riDevice device, riCommandQueue * outQueue )
 // Vulkan Backend Implementation                                       [>>VK_IMPL<<]
 //----------------------------------------------------------------------------------
 
-// Initialize Vulkan state and allocate default resources
+// Create the Vulkan instance, loader hooks and debug messenger
 static riStatus
-_rhioVK_init( riDevice device, const riBackendInitInfo * info )
+_rhioVK_create_instance( riVK_Device * vkDevice, const riInstanceInfo * instanceInfo,
+                         const char * appName, riFlags flags )
 {
-    riVK_Device *           vkDevice       = (riVK_Device *)device;
-    const riInstanceInfo *  instanceInfo   = NULL;
-    const char **           layerNames     = NULL;
-    const char **           extensionNames = NULL;
-    riU32                   layerCount     = 0u;
-    riU32                   addKhronos     = 0u;
-    riU32                   debugUtils     = 0u;
-    riU32                   apiVersion     = VK_API_VERSION_1_4;
-    riU32                   loaderVersion  = 0u;
-    VkApplicationInfo       appInfo        = RI_ZERO_INIT;
-    VkInstanceCreateInfo    createInfo     = RI_ZERO_INIT;
+    const char **  layerNames     = NULL;
+    const char **  extensionNames = NULL;
+    riU32          layerCount     = 0u;
+    riU32          addKhronos     = 0u;
+    riU32          debugUtils     = 0u;
+    riU32          apiVersion     = VK_API_VERSION_1_4;
+    riU32          loaderVersion  = 0u;
+    VkApplicationInfo    appInfo  = RI_ZERO_INIT;
+    VkInstanceCreateInfo createInfo = RI_ZERO_INIT;
     VkDebugUtilsMessengerCreateInfoEXT messengerInfo = RI_ZERO_INIT;
-    VkResult                result         = VK_SUCCESS;
-    bool                    validationLayerMissing = false;
+    VkResult       result         = VK_SUCCESS;
+    bool           validationLayerMissing = false;
 
-    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-
-    instanceInfo = &info->base.instance;
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( instanceInfo != NULL, RI_ERROR_INVALID_PARAM );
 
     // Loader Initialization
     //----------------------------------------------------------
@@ -5837,7 +5847,7 @@ _rhioVK_init( riDevice device, const riBackendInitInfo * info )
     // when installed. Layers requested through riInstanceInfo always load.
     layerCount = instanceInfo->layerCount;
 
-    if( RI_FLAG_CHECK( info->flags, RI_DEVICE_FLAG_DEBUG ) != 0u )
+    if( RI_FLAG_CHECK( flags, RI_DEVICE_FLAG_DEBUG ) != 0u )
         {
             if( _rhioVK_instance_layer_available( "VK_LAYER_KHRONOS_validation" ) )
                 {
@@ -5852,12 +5862,12 @@ _rhioVK_init( riDevice device, const riBackendInitInfo * info )
     // Debug Utils
     //----------------------------------------------------------
     // VK_EXT_debug_utils feeds validation messages into TRACELOG
-    debugUtils = RI_FLAG_CHECK( info->flags, RI_DEVICE_FLAG_DEBUG ) != 0u ? 1u : 0u;
+    debugUtils = RI_FLAG_CHECK( flags, RI_DEVICE_FLAG_DEBUG ) != 0u ? 1u : 0u;
 
     // Instance Creation
     //----------------------------------------------------------
     appInfo.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName   = STR_NONEMPTY( info->base.appName ) ? info->base.appName : "rhio";
+    appInfo.pApplicationName   = STR_NONEMPTY( appName ) ? appName : "rhio";
     appInfo.applicationVersion = RHIO_VERSION;
     appInfo.pEngineName        = "rhio";
     appInfo.engineVersion      = RHIO_VERSION;
@@ -5930,10 +5940,6 @@ _rhioVK_init( riDevice device, const riBackendInitInfo * info )
 
     volkLoadInstance( vkDevice->instance );
 
-    // Surface Extension Tracking
-    //----------------------------------------------------------
-    vkDevice->surfaceExtensions = _rhioVK_surface_extension_mask( instanceInfo );
-
     // Debug Messenger
     //----------------------------------------------------------
     if( debugUtils != 0u )
@@ -5962,15 +5968,38 @@ _rhioVK_init( riDevice device, const riBackendInitInfo * info )
             TRACELOG( RI_LOG_WARNING, "BACKEND VK: VK_LAYER_KHRONOS_validation is not installed" );
         }
 
+    return RI_SUCCESS;
+}
+
+// Initialize Vulkan state and allocate default resources
+static riStatus
+_rhioVK_init( riDevice device, const riBackendInitInfo * info )
+{
+    riVK_Device *          vkDevice     = (riVK_Device *)device;
+    const riInstanceInfo * instanceInfo = NULL;
+    riStatus               status       = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+
+    instanceInfo = &info->base.instance;
+
+    // Instance Creation
+    //----------------------------------------------------------
+    status = _rhioVK_create_instance( vkDevice, instanceInfo, info->base.appName, info->flags );
+    if( RI_FAILED( status ) ) return status;
+
+    // Surface Extension Tracking
+    //----------------------------------------------------------
+    vkDevice->surfaceExtensions = _rhioVK_surface_extension_mask( instanceInfo );
+
     // Device Selection
     //----------------------------------------------------------
-    {
-        riStatus status = _rhioVK_pick_physical( vkDevice );
-        if( RI_FAILED( status ) ) return status;
+    status = _rhioVK_pick_physical( vkDevice );
+    if( RI_FAILED( status ) ) return status;
 
-        status = _rhioVK_create_logical( vkDevice );
-        if( RI_FAILED( status ) ) return status;
-    }
+    status = _rhioVK_create_logical( vkDevice );
+    if( RI_FAILED( status ) ) return status;
 
     // Context Diagnostics
     //----------------------------------------------------------
@@ -5986,6 +6015,16 @@ _rhioVK_init( riDevice device, const riBackendInitInfo * info )
 
     return RI_SUCCESS;
 }
+
+// Destroy-or-skip helper for owned Vulkan handles, local to the shutdown below
+#define RHIO_VK_DESTROY( func, dispatcher, handle )                          \
+    do {                                                                     \
+        if( (handle) != VK_NULL_HANDLE )                                     \
+            {                                                                \
+                func( (dispatcher), (handle), NULL );                        \
+                (handle) = VK_NULL_HANDLE;                                   \
+            }                                                                \
+    } while( 0 )
 
 // Free Vulkan resources and tear down device state
 static void
@@ -6003,18 +6042,10 @@ _rhioVK_shutdown( riDevice device )
                 {
                     vkDeviceWaitIdle( vkDevice->device );
 
-                    if( vkDevice->uploadFence != VK_NULL_HANDLE )
-                        {
-                            vkDestroyFence( vkDevice->device, vkDevice->uploadFence, NULL );
-                        }
-                    if( vkDevice->uploadCommandPool != VK_NULL_HANDLE )
-                        {
-                            vkDestroyCommandPool( vkDevice->device, vkDevice->uploadCommandPool, NULL );
-                        }
-                    if( vkDevice->shaderBufferLayout != VK_NULL_HANDLE )
-                        {
-                            vkDestroyDescriptorSetLayout( vkDevice->device, vkDevice->shaderBufferLayout, NULL );
-                        }
+                    RHIO_VK_DESTROY( vkDestroyFence, vkDevice->device, vkDevice->uploadFence );
+                    RHIO_VK_DESTROY( vkDestroyCommandPool, vkDevice->device, vkDevice->uploadCommandPool );
+                    RHIO_VK_DESTROY( vkDestroyDescriptorSetLayout, vkDevice->device, vkDevice->shaderBufferLayout );
+
                     if( vkDevice->allocator != VK_NULL_HANDLE )
                         {
                             vmaDestroyAllocator( vkDevice->allocator );
@@ -6023,13 +6054,12 @@ _rhioVK_shutdown( riDevice device )
                     vkDestroyDevice( vkDevice->device, NULL );
                 }
 
-            if( vkDevice->debugMessenger != VK_NULL_HANDLE )
-                {
-                    vkDestroyDebugUtilsMessengerEXT( vkDevice->instance, vkDevice->debugMessenger, NULL );
-                }
+            RHIO_VK_DESTROY( vkDestroyDebugUtilsMessengerEXT, vkDevice->instance, vkDevice->debugMessenger );
 
             if( vkDevice->instance != VK_NULL_HANDLE )
                 {
+                    // NOTE: vkDestroyInstance takes no dispatcher parameter, so it
+                    // stays outside the RHIO_VK_DESTROY macro
                     vkDestroyInstance( vkDevice->instance, NULL );
                 }
 
@@ -6039,6 +6069,8 @@ _rhioVK_shutdown( riDevice device )
 
     TRACELOG( RI_LOG_INFO, "BACKEND VK: Shutdown complete" );
 }
+
+#undef RHIO_VK_DESTROY
 
 //----------------------------------------------------------------------------------
 // Backend Descriptor Setup
