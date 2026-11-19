@@ -3278,7 +3278,12 @@ _rhioGL_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
         {
             glCommandList = (riGL_CommandList *)info->commandLists[i];
             RI_GUARD( glCommandList->queue == queue, RI_ERROR_INVALID_PARAM );
-            RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
+            if( !( glCommandList->state == RI_GL_COMMAND_LIST_STATE_EXECUTABLE ) )
+
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND GL: submit_command_lists rejected an invalid state (glCommandList->state == RI_GL_COMMAND_LIST_STATE_EXECUTABLE)" );
+                return RI_ERROR_INVALID_STATE;
+            }
         }
 
     // Command Stream Execution
@@ -3354,7 +3359,12 @@ _rhioGL_command_list_begin( riCommandList commandList )
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
     RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_INITIAL, RI_ERROR_INVALID_STATE );
+    if( !( glCommandList->state == RI_GL_COMMAND_LIST_STATE_INITIAL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_begin rejected an invalid state (glCommandList->state == RI_GL_COMMAND_LIST_STATE_INITIAL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     glCommandList->state = RI_GL_COMMAND_LIST_STATE_RECORDING;
 
@@ -3368,8 +3378,18 @@ _rhioGL_command_list_end( riCommandList commandList )
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
     RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    if( !( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_end rejected an invalid state (glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glCommandList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_end rejected an invalid state (glCommandList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     glCommandList->state = RI_GL_COMMAND_LIST_STATE_EXECUTABLE;
 
@@ -3383,9 +3403,24 @@ _rhioGL_command_list_reset( riCommandList commandList )
     riGL_CommandList * glCommandList = (riGL_CommandList *)commandList;
 
     RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glCommandList->state != RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glCommandList->state != RI_GL_COMMAND_LIST_STATE_PENDING, RI_ERROR_INVALID_STATE );
+    if( !( glCommandList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_reset rejected an invalid state (glCommandList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glCommandList->state != RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_reset rejected an invalid state (glCommandList->state != RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glCommandList->state != RI_GL_COMMAND_LIST_STATE_PENDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: command_list_reset rejected an invalid state (glCommandList->state != RI_GL_COMMAND_LIST_STATE_PENDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     _rhioGL_command_list_clear_commands( glCommandList );
     glCommandList->state = RI_GL_COMMAND_LIST_STATE_INITIAL;
@@ -3414,8 +3449,18 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     riU32                              i               = 0;
     riStatus                           status          = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    if( !( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: begin_render_pass rejected an invalid state (glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glCommandList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: begin_render_pass rejected an invalid state (glCommandList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( info->colorAttachmentCount <= RHIO_MAX_COLOR_ATTACHMENTS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->renderWidth > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->renderHeight > 0u, RI_ERROR_INVALID_PARAM );
@@ -3590,7 +3635,12 @@ _rhioGL_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
     riGL_Swapchain * glSwapchain = (riGL_Swapchain *)swapchain;
 
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
-    RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
+    if( !( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_IDLE ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: get_current_texture rejected an invalid state (glSwapchain->state == RI_GL_SWAPCHAIN_STATE_IDLE)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     glSwapchain->state = RI_GL_SWAPCHAIN_STATE_ACQUIRED;
     *outTexture        = (riTexture)&glSwapchain->currentTexture;
@@ -3606,7 +3656,12 @@ _rhioGL_present( riSwapchain swapchain )
     riStatus         status      = RI_SUCCESS;
 
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
-    RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
+    if( !( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_ACQUIRED ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: present rejected an invalid state (glSwapchain->state == RI_GL_SWAPCHAIN_STATE_ACQUIRED)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Optional Explicit Flush
     //----------------------------------------------------------
@@ -3740,8 +3795,18 @@ _rhioGL_render_pass_end( riRenderPass renderPass )
     riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    if( !( !glRenderPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_end rejected an invalid state (!glRenderPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_end rejected an invalid state (glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     glRenderPass->commandList->activeRenderPass = NULL;
     glRenderPass->ended                         = true;
@@ -3758,9 +3823,24 @@ _rhioGL_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !glRenderPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_pipeline rejected an invalid state (!glRenderPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_pipeline rejected an invalid state (glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_pipeline rejected an invalid state (glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     return _rhioGL_append_bind_pipeline_command( glRenderPass->commandList, pipeline );
 }
@@ -3778,9 +3858,24 @@ _rhioGL_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( glBuffer != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !glRenderPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_shader_buffer rejected an invalid state (!glRenderPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_shader_buffer rejected an invalid state (glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_shader_buffer rejected an invalid state (glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( glBuffer->info.usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( (riSize)offset <= glBuffer->info.size, RI_ERROR_INVALID_PARAM );
@@ -3802,9 +3897,24 @@ _rhioGL_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
     riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !glRenderPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_viewport rejected an invalid state (!glRenderPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_viewport rejected an invalid state (glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_set_viewport rejected an invalid state (glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
 
@@ -3819,9 +3929,24 @@ _rhioGL_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
     riGL_RenderPass * glRenderPass = (riGL_RenderPass *)renderPass;
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !glRenderPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_draw rejected an invalid state (!glRenderPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_draw rejected an invalid state (glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND GL: render_pass_draw rejected an invalid state (glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
     RI_GUARD( firstInstance == 0u, RI_ERROR_BACKEND_UNAVAIL );
@@ -5098,6 +5223,7 @@ typedef struct riVK_Device
     VkQueue                    queue;              // Graphics queue
     VmaAllocator               allocator;          // Vulkan Memory Allocator instance
     VkDescriptorSetLayout      shaderBufferLayout; // Set layout: binding 0 SSBO, vertex stage
+    VkPipelineCache            pipelineCache;      // Driver pipeline compilation cache
     VkCommandPool              uploadCommandPool;  // Pool backing blocking staging uploads
     VkCommandBuffer            uploadCommandBuffer;
     VkFence                    uploadFence;
@@ -5914,6 +6040,22 @@ _rhioVK_create_logical( riVK_Device * vkDevice )
             }
     }
 
+    // Pipeline Cache
+    //----------------------------------------------------------
+    // Driver-managed cache for vkCreateGraphicsPipelines; repeated pipeline
+    // creations skip compilation when the cache has the entry
+    {
+        VkPipelineCacheCreateInfo cacheInfo = RI_ZERO_INIT;
+        cacheInfo.sType                     = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+
+        result = vkCreatePipelineCache( vkDevice->device, &cacheInfo, NULL, &vkDevice->pipelineCache );
+        if( RI_UNLIKELY( result != VK_SUCCESS ) )
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreatePipelineCache failed (%d)", (int)result );
+                return RI_ERROR_BACKEND_INIT;
+            }
+    }
+
     // Blocking Upload Resources
     //----------------------------------------------------------
     {
@@ -6166,7 +6308,12 @@ _rhioVK_command_list_begin( riCommandList commandList )
     VkResult                 result    = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL, RI_ERROR_INVALID_STATE );
+    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_begin rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Command Buffer Recording
     //----------------------------------------------------------
@@ -6193,8 +6340,18 @@ _rhioVK_command_list_end( riCommandList commandList )
     VkResult           result = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_end rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_end rejected an invalid state (vkList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     result = vkEndCommandBuffer( vkList->commandBuffer );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
@@ -6216,9 +6373,24 @@ _rhioVK_command_list_reset( riCommandList commandList )
     VkResult           result = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING, RI_ERROR_INVALID_STATE );
+    if( !( vkList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Reset vs SUBMITTED
     //----------------------------------------------------------
@@ -6279,7 +6451,12 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
         {
             vkList = (riVK_CommandList *)info->commandLists[i];
             RI_GUARD( vkList->queue == vkQueue, RI_ERROR_INVALID_PARAM );
-            RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
+            if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE ) )
+
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: submit_command_lists rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE)" );
+                return RI_ERROR_INVALID_STATE;
+            }
         }
 
     // Frame Target Authorization
@@ -7354,7 +7531,12 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
     riStatus           status      = RI_ERROR_UNKNOWN;
 
     if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
-    RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
+    if( !( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_IDLE ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: get_current_texture rejected an invalid state (vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_IDLE)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Stale Swapchain Recreation
     //----------------------------------------------------------
@@ -7461,13 +7643,23 @@ _rhioVK_present( riSwapchain swapchain )
     VkResult         result      = VK_SUCCESS;
 
     if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
-    RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
+    if( !( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: present rejected an invalid state (vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Submit Requirement
     //----------------------------------------------------------
     // Presenting an unsubmitted frame waits on a render-finished semaphore
     // that will never signal, stalling the queue forever
-    RI_GUARD( vkSwapchain->frameSubmitted, RI_ERROR_INVALID_STATE );
+    if( !( vkSwapchain->frameSubmitted ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: present rejected an invalid state (vkSwapchain->frameSubmitted)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Queue Presentation
     //----------------------------------------------------------
@@ -7905,7 +8097,7 @@ _rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * in
     pipelineInfo.renderPass          = VK_NULL_HANDLE;
     pipelineInfo.subpass             = 0u;
 
-    result = vkCreateGraphicsPipelines( vkDevice->device, VK_NULL_HANDLE, 1u, &pipelineInfo, NULL,
+    result = vkCreateGraphicsPipelines( vkDevice->device, vkDevice->pipelineCache, 1u, &pipelineInfo, NULL,
                                         &vkPipeline->pipeline );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
@@ -8108,8 +8300,18 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     riU32                       i             = 0u;
     riStatus                    status        = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: begin_render_pass rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkList->activeRenderPass == NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: begin_render_pass rejected an invalid state (vkList->activeRenderPass == NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( info->colorAttachmentCount <= RHIO_MAX_COLOR_ATTACHMENTS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->renderWidth > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->renderHeight > 0u, RI_ERROR_INVALID_PARAM );
@@ -8255,8 +8457,18 @@ _rhioVK_render_pass_end( riRenderPass renderPass )
     riU32                imageIndex    = 0u;
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    if( !( !vkPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_end rejected an invalid state (!vkPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_end rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     vkList = vkPass->commandList;
 
@@ -8319,9 +8531,24 @@ _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vkPipeline != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !vkPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (!vkPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Pipeline Bind
     //----------------------------------------------------------
@@ -8371,9 +8598,24 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vkBuffer != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !vkPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (!vkPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( slot == 0u, RI_ERROR_BACKEND_UNAVAIL );
     RI_GUARD( RI_FLAG_CHECK( vkBuffer->info.usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
@@ -8390,7 +8632,12 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
     //----------------------------------------------------------
     vkSwapchain = vkPass->commandList->target;
     RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->boundPipeline != NULL, RI_ERROR_INVALID_STATE );
+    if( !( vkPass->boundPipeline != NULL ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->boundPipeline != NULL)" );
+        return RI_ERROR_INVALID_STATE;
+    }
 
     // Descriptor Set
     //----------------------------------------------------------
@@ -8437,9 +8684,24 @@ _rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
     VkRect2D          scissor  = RI_ZERO_INIT;
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !vkPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (!vkPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
 
@@ -8475,9 +8737,24 @@ _rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
     riVK_RenderPass * vkPass = (riVK_RenderPass *)renderPass;
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    if( !( !vkPass->ended ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (!vkPass->ended)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
+        return RI_ERROR_INVALID_STATE;
+    }
+    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    {
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        return RI_ERROR_INVALID_STATE;
+    }
     RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
     RI_GUARD( firstInstance == 0u, RI_ERROR_BACKEND_UNAVAIL );
@@ -8747,6 +9024,7 @@ _rhioVK_shutdown( riDevice device )
 
                     RHIO_VK_DESTROY( vkDestroyFence, vkDevice->device, vkDevice->uploadFence );
                     RHIO_VK_DESTROY( vkDestroyCommandPool, vkDevice->device, vkDevice->uploadCommandPool );
+                    RHIO_VK_DESTROY( vkDestroyPipelineCache, vkDevice->device, vkDevice->pipelineCache );
                     RHIO_VK_DESTROY( vkDestroyDescriptorSetLayout, vkDevice->device, vkDevice->shaderBufferLayout );
 
                     if( vkDevice->allocator != VK_NULL_HANDLE )
