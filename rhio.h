@@ -5050,6 +5050,7 @@ typedef struct riVK_Device
 typedef struct riVK_Buffer
 {
     riBufferBase  base;       // Frontend handle dispatch
+    riVK_Device * device;     // Owning device state (allocator access)
     riBufferInfo  info;       // Normalized metadata; data pointer is not retained
     VkBuffer      buffer;     // Buffer object
     VmaAllocation allocation; // VMA allocation handle
@@ -5214,16 +5215,53 @@ static riStatus _rhioVK_create_buffer( riDevice device, const riBufferInfo * inf
 static riStatus _rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info,
                                                 riRenderPipeline * outPipeline );
 
+// Command queue
+static riStatus _rhioVK_create_command_list( riCommandQueue queue, riCommandList * outCommandList );
+static void     _rhioVK_destroy_command_queue( riCommandQueue queue );
+static riStatus _rhioVK_submit_command_list( riCommandQueue queue, riCommandList commandList );
+static riStatus _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitInfo * info );
+
+// Command list
+static void     _rhioVK_destroy_command_list( riCommandList commandList );
+static riStatus _rhioVK_command_list_begin( riCommandList commandList );
+static riStatus _rhioVK_command_list_end( riCommandList commandList );
+static riStatus _rhioVK_command_list_reset( riCommandList commandList );
+static riStatus _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info,
+                                           riRenderPass * outRenderPass );
+
+// Buffers
+static void _rhioVK_destroy_buffer( riBuffer buffer );
+static void _rhioVK_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo );
+
 //----------------------------------------------------------------------------------
 // Vulkan Backend Vtable
 //----------------------------------------------------------------------------------
-// NOTE: Only the slots validated by rhioCreateDevice() are registered until the
-// matching backend milestones land. Unregistered slots stay NULL.
 
 static const riDeviceVTable s_vk_vtable = {
     .init                 = _rhioVK_init,
     .shutdown             = _rhioVK_shutdown,
     .create_command_queue = _rhioVK_create_command_queue,
+    .create_buffer        = _rhioVK_create_buffer,
+};
+
+static const riCommandQueueVTable s_vk_command_queue_vtable = {
+    .create_command_list   = _rhioVK_create_command_list,
+    .destroy_command_queue = _rhioVK_destroy_command_queue,
+    .submit_command_list   = _rhioVK_submit_command_list,
+    .submit_command_lists  = _rhioVK_submit_command_lists,
+};
+
+static const riCommandListVTable s_vk_command_list_vtable = {
+    .destroy_command_list = _rhioVK_destroy_command_list,
+    .begin                = _rhioVK_command_list_begin,
+    .end                  = _rhioVK_command_list_end,
+    .reset                = _rhioVK_command_list_reset,
+    .begin_render_pass    = _rhioVK_begin_render_pass,
+};
+
+static const riBufferVTable s_vk_buffer_vtable = {
+    .destroy_buffer  = _rhioVK_destroy_buffer,
+    .get_buffer_info = _rhioVK_get_buffer_info,
 };
 
 //----------------------------------------------------------------------------------
@@ -5769,21 +5807,555 @@ _rhioVK_create_logical( riVK_Device * vkDevice )
 }
 
 //----------------------------------------------------------------------------------
-// Backend Slot Stubs
+// Vulkan Command Queue Implementation
 //----------------------------------------------------------------------------------
-// Slots still pending their implementation milestone report clear errors so the
-// frontend surfaces them instead of crashing on NULL dispatch
 
-// Create a Vulkan command queue wrapper
+// Initialize a Vulkan command queue wrapper with its command pool
 static riStatus
 _rhioVK_create_command_queue( riDevice device, riCommandQueue * outQueue )
 {
-    UNUSED( device );
-    UNUSED( outQueue );
+    riVK_Device *             vkDevice = (riVK_Device *)device;
+    riVK_CommandQueue *       vkQueue  = NULL;
+    VkCommandPoolCreateInfo   poolInfo = RI_ZERO_INIT;
+    VkResult                  result   = VK_SUCCESS;
 
-    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Command queues are not implemented yet" );
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Queue Allocation
+    //----------------------------------------------------------
+    vkQueue = (riVK_CommandQueue *)RI_CALLOC( 1, sizeof( *vkQueue ) );
+    if( RI_UNLIKELY( vkQueue == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Command Pool Creation
+    //----------------------------------------------------------
+    // RESET_COMMAND_BUFFER_BIT lets each command list reset independently
+    poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = vkDevice->queueFamily;
+
+    result = vkCreateCommandPool( vkDevice->device, &poolInfo, NULL, &vkQueue->commandPool );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateCommandPool failed (%d)", (int)result );
+            RI_FREE( vkQueue );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Queue Dispatch Initialization
+    //----------------------------------------------------------
+    vkQueue->base.vtable = &s_vk_command_queue_vtable;
+    vkQueue->device      = vkDevice;
+
+    _rhioVK_set_object_name( vkDevice, VK_OBJECT_TYPE_COMMAND_POOL, (riU64)vkQueue->commandPool,
+                             "rhio command pool" );
+
+    // Queue Handle Handoff
+    //----------------------------------------------------------
+    *outQueue = (riCommandQueue)vkQueue;
+
+    return RI_SUCCESS;
+}
+
+// Destroy a Vulkan command queue and its remaining command lists
+static void
+_rhioVK_destroy_command_queue( riCommandQueue queue )
+{
+    riVK_CommandQueue * vkQueue     = (riVK_CommandQueue *)queue;
+    riVK_CommandList *  commandList = NULL;
+
+    RI_GUARD_VOID( vkQueue != NULL );
+
+    // Command List Cleanup
+    //----------------------------------------------------------
+    // Frontend-owned list handles are released here so a missing
+    // rhioDestroyCommandList call cannot leak, matching the GL backend contract.
+    // Command buffers die with the pool, no per-list release needed
+    while( NULL != vkQueue->commandLists )
+        {
+            commandList           = vkQueue->commandLists;
+            vkQueue->commandLists = commandList->next;
+
+            if( commandList->activeRenderPass != NULL )
+                {
+                    riRenderPassBase * passBase = (riRenderPassBase *)commandList->activeRenderPass;
+                    if( passBase->vtable != NULL && passBase->vtable->end != NULL )
+                        {
+                            (void)passBase->vtable->end( (riRenderPass)commandList->activeRenderPass );
+                        }
+                }
+
+            RI_FREE( commandList );
+        }
+
+    // Command Pool Cleanup
+    //----------------------------------------------------------
+    if( vkQueue->commandPool != VK_NULL_HANDLE )
+        {
+            vkDestroyCommandPool( vkQueue->device->device, vkQueue->commandPool, NULL );
+            vkQueue->commandPool = VK_NULL_HANDLE;
+        }
+}
+
+// Create a command list backed by one primary command buffer
+static riStatus
+_rhioVK_create_command_list( riCommandQueue queue, riCommandList * outCommandList )
+{
+    riVK_CommandQueue *         vkQueue   = (riVK_CommandQueue *)queue;
+    riVK_CommandList *          vkList    = NULL;
+    VkCommandBufferAllocateInfo allocInfo = RI_ZERO_INIT;
+    VkResult                    result    = VK_SUCCESS;
+
+    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outCommandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Command List Allocation
+    //----------------------------------------------------------
+    vkList = (riVK_CommandList *)RI_CALLOC( 1, sizeof( *vkList ) );
+    if( RI_UNLIKELY( vkList == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Command Buffer Allocation
+    //----------------------------------------------------------
+    allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool        = vkQueue->commandPool;
+    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1u;
+
+    result = vkAllocateCommandBuffers( vkQueue->device->device, &allocInfo, &vkList->commandBuffer );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateCommandBuffers failed (%d)", (int)result );
+            RI_FREE( vkList );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Command List Dispatch Initialization
+    //----------------------------------------------------------
+    vkList->base.vtable = &s_vk_command_list_vtable;
+    vkList->queue       = vkQueue;
+
+    // Queue Ownership Link
+    //----------------------------------------------------------
+    // The queue tracks live lists so queue destruction can clean up command
+    // memory even if the frontend destroys the queue before individual lists
+    vkList->next          = vkQueue->commandLists;
+    vkQueue->commandLists = vkList;
+
+    // Command List Handle Handoff
+    //----------------------------------------------------------
+    *outCommandList = (riCommandList)vkList;
+
+    return RI_SUCCESS;
+}
+
+// Destroy one command list and detach it from its owning queue
+static void
+_rhioVK_destroy_command_list( riCommandList commandList )
+{
+    riVK_CommandList *  vkList  = (riVK_CommandList *)commandList;
+    riVK_CommandQueue * vkQueue = NULL;
+    riVK_CommandList ** cursor  = NULL;
+
+    RI_GUARD_VOID( vkList != NULL );
+
+    // Active Render Pass Cleanup
+    //----------------------------------------------------------
+    if( vkList->activeRenderPass != NULL )
+        {
+            riRenderPassBase * passBase = (riRenderPassBase *)vkList->activeRenderPass;
+            if( passBase->vtable != NULL && passBase->vtable->end != NULL )
+                {
+                    (void)passBase->vtable->end( (riRenderPass)vkList->activeRenderPass );
+                }
+        }
+
+    // Command Buffer Release
+    //----------------------------------------------------------
+    vkQueue = vkList->queue;
+    if( vkQueue != NULL && vkList->commandBuffer != VK_NULL_HANDLE && vkQueue->commandPool != VK_NULL_HANDLE )
+        {
+            vkFreeCommandBuffers( vkQueue->device->device, vkQueue->commandPool, 1u, &vkList->commandBuffer );
+            vkList->commandBuffer = VK_NULL_HANDLE;
+        }
+
+    // Queue Ownership Unlink
+    //----------------------------------------------------------
+    // The frontend frees the wrapper after this callback returns, so the backend
+    // only detaches queue-owned links, matching the GL backend contract
+    if( vkQueue != NULL )
+        {
+            cursor = &vkQueue->commandLists;
+            while( *cursor != NULL )
+                {
+                    if( *cursor == vkList )
+                        {
+                            *cursor = vkList->next;
+                            break;
+                        }
+
+                    cursor = &( *cursor )->next;
+                }
+        }
+}
+
+// Begin command recording
+static riStatus
+_rhioVK_command_list_begin( riCommandList commandList )
+{
+    riVK_CommandList *       vkList   = (riVK_CommandList *)commandList;
+    VkCommandBufferBeginInfo beginInfo = RI_ZERO_INIT;
+    VkResult                 result    = VK_SUCCESS;
+
+    RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL, RI_ERROR_INVALID_STATE );
+
+    // Command Buffer Recording
+    //----------------------------------------------------------
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    result = vkBeginCommandBuffer( vkList->commandBuffer, &beginInfo );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkBeginCommandBuffer failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    vkList->state = RI_VK_COMMAND_LIST_STATE_RECORDING;
+
+    return RI_SUCCESS;
+}
+
+// Finish command recording
+static riStatus
+_rhioVK_command_list_end( riCommandList commandList )
+{
+    riVK_CommandList * vkList = (riVK_CommandList *)commandList;
+    VkResult           result = VK_SUCCESS;
+
+    RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+
+    result = vkEndCommandBuffer( vkList->commandBuffer );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkEndCommandBuffer failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    vkList->state = RI_VK_COMMAND_LIST_STATE_EXECUTABLE;
+
+    return RI_SUCCESS;
+}
+
+// Reset command recording state and discard recorded commands
+static riStatus
+_rhioVK_command_list_reset( riCommandList commandList )
+{
+    riVK_CommandList * vkList = (riVK_CommandList *)commandList;
+    VkResult           result = VK_SUCCESS;
+
+    RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING, RI_ERROR_INVALID_STATE );
+
+    // Reset vs SUBMITTED
+    //----------------------------------------------------------
+    // Like GL, reset after submission is accepted. The frame-in-flight fence
+    // introduced with the swapchain milestone guarantees the backing command
+    // buffer is no longer executing by the time a new frame records
+    result = vkResetCommandBuffer( vkList->commandBuffer, 0 );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkResetCommandBuffer failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    vkList->state  = RI_VK_COMMAND_LIST_STATE_INITIAL;
+    vkList->target = NULL;
+
+    return RI_SUCCESS;
+}
+
+// Begin a render pass over the acquired swapchain image
+// NOTE: Real recording lands with the dynamic-rendering milestone
+static riStatus
+_rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info, riRenderPass * outRenderPass )
+{
+    UNUSED( commandList );
+    UNUSED( info );
+    UNUSED( outRenderPass );
+
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Render passes are not implemented yet" );
 
     return RI_ERROR_BACKEND_UNAVAIL;
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Submission
+//----------------------------------------------------------------------------------
+
+// Submit one command list to the Vulkan graphics queue
+static riStatus
+_rhioVK_submit_command_list( riCommandQueue queue, riCommandList commandList )
+{
+    riCommandQueueSubmitInfo submitInfo = RI_ZERO_INIT;
+
+    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
+
+    submitInfo.commandLists     = &commandList;
+    submitInfo.commandListCount = 1u;
+
+    return _rhioVK_submit_command_lists( queue, &submitInfo );
+}
+
+// Submit command lists to the Vulkan graphics queue in caller-provided order
+// NOTE: Semaphore-driven submission lands with the swapchain milestone; the
+//       frame-in-flight fence guarding command buffer reuse is owned there
+static riStatus
+_rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitInfo * info )
+{
+    riVK_CommandQueue * vkQueue = (riVK_CommandQueue *)queue;
+    riVK_CommandList *  vkList  = NULL;
+    riU32               i       = 0u;
+
+    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->commandLists != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->commandListCount > 0u, RI_ERROR_INVALID_PARAM );
+
+    // Submit Validation
+    //----------------------------------------------------------
+    // Validate the full batch before submitting any command list so a malformed
+    // batch cannot partially submit
+    for( i = 0u; i < info->commandListCount; ++i )
+        {
+            RI_GUARD( info->commandLists[i] != NULL, RI_ERROR_INVALID_PARAM );
+
+            vkList = (riVK_CommandList *)info->commandLists[i];
+            RI_GUARD( vkList->queue == vkQueue, RI_ERROR_INVALID_PARAM );
+            RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
+        }
+
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Submission requires a swapchain target (pending milestone)" );
+
+    return RI_ERROR_BACKEND_UNAVAIL;
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Buffer Implementation
+//----------------------------------------------------------------------------------
+
+// Create a buffer, with a blocking staging copy when initial contents are given
+static riStatus
+_rhioVK_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer )
+{
+    riVK_Device *           vkDevice   = (riVK_Device *)device;
+    riVK_Buffer *           vkBuffer   = NULL;
+    riBufferInfo            normalized = RI_ZERO_INIT;
+    const riFlags           validUsage = RI_BUFFER_USAGE_SHADER_READ;
+    VkBufferCreateInfo      createInfo = RI_ZERO_INIT;
+    VmaAllocationCreateInfo allocInfo  = RI_ZERO_INIT;
+    VkResult                result     = VK_SUCCESS;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outBuffer != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->size > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( info->usage, ~validUsage ) == 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( info->usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
+
+    // Buffer Allocation
+    //----------------------------------------------------------
+    vkBuffer = (riVK_Buffer *)RI_CALLOC( 1, sizeof( *vkBuffer ) );
+    if( RI_UNLIKELY( vkBuffer == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    normalized            = *info;
+    normalized.data       = NULL;
+
+    vkBuffer->base.vtable = &s_vk_buffer_vtable;
+    vkBuffer->device      = vkDevice;
+    vkBuffer->info        = normalized;
+
+    // Device Buffer Creation
+    //----------------------------------------------------------
+    // Shader-visible storage buffer; the TRANSFER_DST bit backs the staging
+    // upload path below
+    createInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    createInfo.size        = info->size;
+    createInfo.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    result = vmaCreateBuffer( vkDevice->allocator, &createInfo, &allocInfo, &vkBuffer->buffer,
+                              &vkBuffer->allocation, NULL );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vmaCreateBuffer failed (%d)", (int)result );
+            RI_FREE( vkBuffer );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    _rhioVK_set_object_name( vkDevice, VK_OBJECT_TYPE_BUFFER, (riU64)vkBuffer->buffer, info->name );
+
+    // Staging Upload
+    //----------------------------------------------------------
+    // Initial contents are copied through a mapped staging buffer on the
+    // dedicated upload command buffer; the wait is blocking by design
+    if( info->data != NULL )
+        {
+            VkBufferCreateInfo        stagingCreateInfo = createInfo;
+            VmaAllocationCreateInfo   stagingAllocInfo  = allocInfo;
+            VkBuffer                  stagingBuffer     = VK_NULL_HANDLE;
+            VmaAllocation             stagingAllocation = VK_NULL_HANDLE;
+            VmaAllocationInfo         stagingAllocOut   = RI_ZERO_INIT;
+            VkCommandBufferBeginInfo  beginInfo         = RI_ZERO_INIT;
+            VkBufferCopy2             copyRegion        = RI_ZERO_INIT;
+            VkCopyBufferInfo2         copyInfo          = RI_ZERO_INIT;
+            VkCommandBufferSubmitInfo cmdBufferInfo     = RI_ZERO_INIT;
+            VkSubmitInfo2             submitInfo        = RI_ZERO_INIT;
+
+            stagingCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+            stagingAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                                     | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+            result = vmaCreateBuffer( vkDevice->allocator, &stagingCreateInfo, &stagingAllocInfo,
+                                      &stagingBuffer, &stagingAllocation, &stagingAllocOut );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vmaCreateBuffer (staging) failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            memcpy( stagingAllocOut.pMappedData, info->data, info->size );
+
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            copyRegion.sType     = VK_STRUCTURE_TYPE_BUFFER_COPY_2;
+            copyRegion.srcOffset = 0u;
+            copyRegion.dstOffset = 0u;
+            copyRegion.size      = (VkDeviceSize)info->size;
+
+            copyInfo.sType       = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2;
+            copyInfo.srcBuffer   = stagingBuffer;
+            copyInfo.dstBuffer   = vkBuffer->buffer;
+            copyInfo.regionCount = 1u;
+            copyInfo.pRegions    = &copyRegion;
+
+            cmdBufferInfo.sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+            cmdBufferInfo.commandBuffer = vkDevice->uploadCommandBuffer;
+
+            submitInfo.sType                  = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+            submitInfo.commandBufferInfoCount = 1u;
+            submitInfo.pCommandBufferInfos    = &cmdBufferInfo;
+
+            result = vkResetFences( vkDevice->device, 1u, &vkDevice->uploadFence );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkResetFences failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            result = vkBeginCommandBuffer( vkDevice->uploadCommandBuffer, &beginInfo );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkBeginCommandBuffer (upload) failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            vkCmdCopyBuffer2( vkDevice->uploadCommandBuffer, &copyInfo );
+
+            result = vkEndCommandBuffer( vkDevice->uploadCommandBuffer );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkEndCommandBuffer (upload) failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            result = vkQueueSubmit2( vkDevice->queue, 1u, &submitInfo, vkDevice->uploadFence );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkQueueSubmit2 (upload) failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            result = vkWaitForFences( vkDevice->device, 1u, &vkDevice->uploadFence, VK_TRUE, UINT64_MAX );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkWaitForFences (upload) failed (%d)", (int)result );
+                    vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+                    vmaDestroyBuffer( vkDevice->allocator, vkBuffer->buffer, vkBuffer->allocation );
+                    RI_FREE( vkBuffer );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            vmaDestroyBuffer( vkDevice->allocator, stagingBuffer, stagingAllocation );
+        }
+
+    // Buffer Handle Handoff
+    //----------------------------------------------------------
+    *outBuffer = (riBuffer)vkBuffer;
+
+    return RI_SUCCESS;
+}
+
+// Destroy a Vulkan buffer and its VMA allocation
+static void
+_rhioVK_destroy_buffer( riBuffer buffer )
+{
+    riVK_Buffer * vkBuffer = (riVK_Buffer *)buffer;
+
+    RI_GUARD_VOID( vkBuffer != NULL );
+
+    if( vkBuffer->buffer != VK_NULL_HANDLE )
+        {
+            // NOTE: The frontend frees the wrapper after this callback returns;
+            // only backend-owned Vulkan objects are released here
+            vmaDestroyBuffer( vkBuffer->device->allocator, vkBuffer->buffer, vkBuffer->allocation );
+            vkBuffer->buffer     = VK_NULL_HANDLE;
+            vkBuffer->allocation = VK_NULL_HANDLE;
+        }
+}
+
+// Get the normalized metadata of a Vulkan buffer
+static void
+_rhioVK_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo )
+{
+    riVK_Buffer * vkBuffer = (riVK_Buffer *)buffer;
+
+    RI_GUARD_VOID( vkBuffer != NULL );
+    RI_GUARD_VOID( outInfo != NULL );
+
+    *outInfo = vkBuffer->info;
 }
 
 //----------------------------------------------------------------------------------
