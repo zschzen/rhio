@@ -7805,13 +7805,24 @@ _rhioVK_destroy_swapchain( riSwapchain swapchain )
 
             for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
                 {
-                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING
-                        && cursor->target == vkSwapchain )
+                    if( cursor->target != vkSwapchain ) continue;
+
+                    // An open pass would read this (now freed) swapchain
+                    // through render_pass_end; detach and release the plain
+                    // wrapper here
+                    if( cursor->activeRenderPass != NULL )
+                        {
+                            RI_FREE( cursor->activeRenderPass );
+                            cursor->activeRenderPass = NULL;
+                        }
+
+                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING )
                         {
                             cursor->state       = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
                             cursor->pendingSlot = 0u;
-                            cursor->target      = NULL;
                         }
+
+                    cursor->target = NULL;
                 }
         }
 
