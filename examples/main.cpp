@@ -14,6 +14,8 @@
 #include "example.hpp"
 #include "window.hpp"
 
+#include <cstdlib>
+
 #if defined( __EMSCRIPTEN__ )
 #    include <emscripten/emscripten.h>
 #endif
@@ -56,10 +58,25 @@ main()
 #if defined( __EMSCRIPTEN__ )
     emscripten_set_main_loop( UpdateDrawFrame, 0, 1 );
 #else
+    // Frame Cap
+    //----------------------------------------------------------
+    // Optional test harness limit (CI smoke); 0 or unset runs forever
+    long maxFrames  = 0;
+    long frameCount = 0;
+    if( const char * envValue = std::getenv( "RHIO_EXAMPLE_MAX_FRAMES" ) )
+        {
+            maxFrames = std::atol( envValue );
+        }
+
     // Main game loop
     while( !WindowShouldClose() )
         {
             UpdateDrawFrame();
+
+            if( ( maxFrames > 0 ) && ( ++frameCount >= maxFrames ) )
+                {
+                    break;
+                }
         }
 #endif
 

@@ -17,6 +17,17 @@
 #endif
 #include <GLFW/glfw3.h>
 
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+#    if defined( _WIN32 )
+#        define GLFW_EXPOSE_NATIVE_WIN32
+#    elif defined( __APPLE__ )
+// NOTE: Metal surface requires Objective-C (CAMetalLayer); deferred
+#    else
+#        define GLFW_EXPOSE_NATIVE_X11
+#    endif
+#    include <GLFW/glfw3native.h>
+#endif
+
 #include <cstdio>
 #include <string>
 
@@ -181,6 +192,72 @@ GetWindowGlProcAddress( const char * name )
 #else
     UNUSED( name );
     return nullptr;
+#endif
+}
+
+bool
+GetInstanceExtensions( riInstanceInfo * outInfo )
+{
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    if( outInfo == nullptr )
+        {
+            return false;
+        }
+
+    uint32_t      count      = 0;
+    const char ** extensions = glfwGetRequiredInstanceExtensions( &count );
+    if( ( extensions == nullptr ) || ( count == 0 ) )
+        {
+            return false;
+        }
+
+    // NOTE: GLFW owns the array; it stays valid until glfwTerminate()
+    outInfo->extensions     = extensions;
+    outInfo->extensionCount = (riU32)count;
+    return true;
+#else
+    UNUSED( outInfo );
+    return false;
+#endif
+}
+
+bool
+GetSwapchainHandle( riSwapchainInfo * outInfo )
+{
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    if( ( outInfo == nullptr ) || ( windowState.handle == nullptr ) )
+        {
+            return false;
+        }
+
+    int width  = 0;
+    int height = 0;
+    glfwGetFramebufferSize( windowState.handle, &width, &height );
+    if( ( width <= 0 ) || ( height <= 0 ) )
+        {
+            return false;
+        }
+
+    outInfo->width  = (riU32)width;
+    outInfo->height = (riU32)height;
+
+#    if defined( _WIN32 )
+    outInfo->handleType           = RHIO_SWAPCHAIN_HANDLE_TYPE_HWND;
+    outInfo->handle.hwnd.instance = GetModuleHandle( nullptr );
+    outInfo->handle.hwnd.window   = glfwGetWin32Window( windowState.handle );
+    return ( outInfo->handle.hwnd.instance != nullptr ) && ( outInfo->handle.hwnd.window != nullptr );
+#    elif defined( __APPLE__ )
+    // NOTE: Metal surface creation requires Objective-C; not supported yet
+    return false;
+#    else
+    outInfo->handleType         = RHIO_SWAPCHAIN_HANDLE_TYPE_X11;
+    outInfo->handle.x11.display = glfwGetX11Display();
+    outInfo->handle.x11.window  = (riUPtr)glfwGetX11Window( windowState.handle );
+    return ( outInfo->handle.x11.display != nullptr ) && ( outInfo->handle.x11.window != 0 );
+#    endif
+#else
+    UNUSED( outInfo );
+    return false;
 #endif
 }
 
