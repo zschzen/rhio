@@ -9,8 +9,6 @@
  *
  *******************************************************************************************/
 
-#define RHIO_IMPLEMENTATION
-#define RHIO_BACKEND_VULKAN
 #include "rhio.h"
 
 #include <benchmark/benchmark.h>

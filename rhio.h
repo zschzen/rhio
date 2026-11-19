@@ -336,6 +336,11 @@ typedef enum
 {
     RI_SWAPCHAIN_PRESENT_FLAG_NONE        = 0,
     RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH = 1u << 0, // Request an explicit backend flush before native present
+    // Prefer an unthrottled present (no vertical sync wait). Vulkan falls back
+    // to the default present mode when the device lacks an unthrottled one;
+    // OpenGL hosts control the swap interval on their own context and should
+    // keep it at zero for the same effect
+    RI_SWAPCHAIN_PRESENT_FLAG_NO_VSYNC = 1u << 1,
 
 } riSwapchainPresentFlag;
 
@@ -2913,7 +2918,8 @@ _rhioGL_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
                           riSwapchain * outSwapchain )
 {
     riGL_Swapchain * glSwapchain       = NULL;
-    riFlags          validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH;
+    riFlags          validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH
+                                     | RI_SWAPCHAIN_PRESENT_FLAG_NO_VSYNC;
 
     RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
@@ -5370,7 +5376,10 @@ typedef struct riVK_Swapchain
     VkSemaphore         renderFinished[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
     VkFence             fences[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
     bool                fenceBusy[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
-    VkDescriptorPool    descriptorPools[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // Per-slot SSBO sets
+    VkDescriptorPool    descriptorPool;     // Permanent pool; slot sets allocated once
+    VkDescriptorSet     slotSets[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    riBuffer            slotBoundBuffers[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // Last SSBO bound per slot
+    riU32               slotBoundOffsets[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // Last bind offset per slot
 
 } riVK_Swapchain;
 
@@ -7139,6 +7148,54 @@ _rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain )
     createInfo.clipped          = VK_TRUE;
     createInfo.oldSwapchain     = oldSwapchain;
 
+    // Unthrottled Present Mode
+    //----------------------------------------------------------
+    // FIFO is the only universally supported mode; NO_VSYNC opts into an
+    // unthrottled one when the surface exposes it
+    if( RI_FLAG_CHECK( vkSwapchain->info.presentFlags, RI_SWAPCHAIN_PRESENT_FLAG_NO_VSYNC ) != 0u )
+        {
+            VkPresentModeKHR * modes   = NULL;
+            riU32              modeCount = 0u;
+            VkPresentModeKHR   unthrottled = VK_PRESENT_MODE_MAX_ENUM_KHR;
+
+            result = vkGetPhysicalDeviceSurfacePresentModesKHR( vkDevice->physicalDevice, vkSwapchain->surface,
+                                                               &modeCount, NULL );
+            if( RI_LIKELY( result == VK_SUCCESS ) && modeCount > 0u )
+                {
+                    modes = (VkPresentModeKHR *)RI_MALLOC( (riSize)modeCount * sizeof( *modes ) );
+                    if( modes != NULL )
+                        {
+                            result = vkGetPhysicalDeviceSurfacePresentModesKHR( vkDevice->physicalDevice,
+                                                                               vkSwapchain->surface, &modeCount,
+                                                                               modes );
+                            if( RI_LIKELY( result == VK_SUCCESS ) )
+                                {
+                                    for( riU32 m = 0u; m < modeCount; ++m )
+                                        {
+                                            // IMMEDIATE has no pacing at all; MAILBOX still paces but
+                                            // never queues like FIFO
+                                            if( modes[m] == VK_PRESENT_MODE_IMMEDIATE_KHR ) unthrottled = modes[m];
+                                        }
+
+                                    if( unthrottled == VK_PRESENT_MODE_MAX_ENUM_KHR )
+                                        {
+                                            for( riU32 m = 0u; m < modeCount; ++m )
+                                                {
+                                                    if( modes[m] == VK_PRESENT_MODE_MAILBOX_KHR ) unthrottled = modes[m];
+                                                }
+                                        }
+                                }
+
+                            RI_FREE( modes );
+                        }
+                }
+
+            if( unthrottled != VK_PRESENT_MODE_MAX_ENUM_KHR )
+                {
+                    createInfo.presentMode = unthrottled;
+                }
+        }
+
     result = vkCreateSwapchainKHR( vkDevice->device, &createInfo, NULL, &vkSwapchain->swapchain );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
@@ -7292,10 +7349,10 @@ _rhioVK_destroy_swapchain_sync( riVK_Swapchain * vkSwapchain )
                     vkSwapchain->fences[i] = VK_NULL_HANDLE;
                 }
 
-            if( vkSwapchain->descriptorPools[i] != VK_NULL_HANDLE )
+            if( vkSwapchain->descriptorPool != VK_NULL_HANDLE )
                 {
-                    vkDestroyDescriptorPool( vkDevice->device, vkSwapchain->descriptorPools[i], NULL );
-                    vkSwapchain->descriptorPools[i] = VK_NULL_HANDLE;
+                    vkDestroyDescriptorPool( vkDevice->device, vkSwapchain->descriptorPool, NULL );
+                    vkSwapchain->descriptorPool = VK_NULL_HANDLE;
                 }
         }
 
@@ -7317,7 +7374,8 @@ _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
     riVK_Device *         vkDevice     = (riVK_Device *)device;
     riVK_CommandQueue *   vkQueue      = (riVK_CommandQueue *)queue;
     riVK_Swapchain *      vkSwapchain  = NULL;
-    const riFlags         validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH;
+    const riFlags         validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH
+                                            | RI_SWAPCHAIN_PRESENT_FLAG_NO_VSYNC;
     VkSemaphoreCreateInfo semaphoreInfo = RI_ZERO_INIT;
     VkFenceCreateInfo     fenceInfo     = RI_ZERO_INIT;
     VkDescriptorPoolSize  poolSize      = RI_ZERO_INIT;
@@ -7421,23 +7479,20 @@ _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
                 }
         }
 
-    // Descriptor Pools
+    // Descriptor Pool
     //----------------------------------------------------------
-    // One pool per frame slot, reset between frames of the same slot
+    // One permanent pool; every frame slot gets a set allocated once here.
+    // set_shader_buffer rewrites the set only when the bound buffer changes,
+    // so no descriptor allocation happens during recording
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = RHIO_VK_DESCRIPTOR_SETS_PER_FRAME;
+    poolSize.descriptorCount = vkSwapchain->frameSlotCount;
 
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets       = RHIO_VK_DESCRIPTOR_SETS_PER_FRAME;
+    poolInfo.maxSets       = vkSwapchain->frameSlotCount;
     poolInfo.poolSizeCount = 1u;
     poolInfo.pPoolSizes    = &poolSize;
 
-    for( slot = 0u; slot < vkSwapchain->frameSlotCount && result == VK_SUCCESS; ++slot )
-        {
-            result = vkCreateDescriptorPool( vkDevice->device, &poolInfo, NULL,
-                                             &vkSwapchain->descriptorPools[slot] );
-        }
-
+    result = vkCreateDescriptorPool( vkDevice->device, &poolInfo, NULL, &vkSwapchain->descriptorPool );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: swapchain sync creation failed (%d)", (int)result );
@@ -7445,6 +7500,28 @@ _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
             vkDestroySurfaceKHR( vkDevice->instance, vkSwapchain->surface, NULL );
             RI_FREE( vkSwapchain );
             return RI_ERROR_BACKEND_INIT;
+        }
+
+    for( slot = 0u; slot < vkSwapchain->frameSlotCount; ++slot )
+        {
+            VkDescriptorSetAllocateInfo setAllocInfo = RI_ZERO_INIT;
+            setAllocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            setAllocInfo.descriptorPool     = vkSwapchain->descriptorPool;
+            setAllocInfo.descriptorSetCount = 1u;
+            setAllocInfo.pSetLayouts        = &vkDevice->shaderBufferLayout;
+
+            result = vkAllocateDescriptorSets( vkDevice->device, &setAllocInfo, &vkSwapchain->slotSets[slot] );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: swapchain sync creation failed (%d)", (int)result );
+                    _rhioVK_destroy_swapchain_sync( vkSwapchain );
+                    vkDestroySurfaceKHR( vkDevice->instance, vkSwapchain->surface, NULL );
+                    RI_FREE( vkSwapchain );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            vkSwapchain->slotBoundBuffers[slot] = NULL;
+            vkSwapchain->slotBoundOffsets[slot] = 0u;
         }
 
     // Swapchain Object
@@ -7512,7 +7589,8 @@ _rhioVK_reap_slots( riVK_Swapchain * vkSwapchain, bool blocking )
                         }
                 }
 
-            vkResetDescriptorPool( vkSwapchain->device->device, vkSwapchain->descriptorPools[slot], 0 );
+            // NOTE: No descriptor pool reset here; slot sets are permanent
+            //       and rewritten in place when the bound buffer changes
 
             vkResetFences( vkSwapchain->device->device, 1u, &vkSwapchain->fences[slot] );
 
@@ -8590,11 +8668,9 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
     riVK_Buffer *               vkBuffer   = (riVK_Buffer *)buffer;
     riVK_Device *               vkDevice   = NULL;
     riVK_Swapchain *            vkSwapchain = NULL;
-    VkDescriptorSetAllocateInfo allocInfo   = RI_ZERO_INIT;
     VkDescriptorBufferInfo      bufferInfo  = RI_ZERO_INIT;
     VkWriteDescriptorSet        write       = RI_ZERO_INIT;
     VkDescriptorSet             set         = VK_NULL_HANDLE;
-    VkResult                    result      = VK_SUCCESS;
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vkBuffer != NULL, RI_ERROR_INVALID_PARAM );
@@ -8641,31 +8717,27 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
 
     // Descriptor Set
     //----------------------------------------------------------
-    // Allocated from the acquired frame slot pool and reset by the next
-    // acquire that reaps that slot
-    allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool     = vkSwapchain->descriptorPools[vkSwapchain->acquiredSlot];
-    allocInfo.descriptorSetCount = 1u;
-    allocInfo.pSetLayouts        = &vkDevice->shaderBufferLayout;
-
-    result = vkAllocateDescriptorSets( vkDevice->device, &allocInfo, &set );
-    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+    // The slot set is permanent; rewrite it only when the bound buffer or
+    // offset changed since the slot last bound it
+    set = vkSwapchain->slotSets[vkSwapchain->acquiredSlot];
+    if( vkSwapchain->slotBoundBuffers[vkSwapchain->acquiredSlot] != buffer
+        || vkSwapchain->slotBoundOffsets[vkSwapchain->acquiredSlot] != offset )
         {
-            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateDescriptorSets failed (%d)", (int)result );
-            return RI_ERROR_UNKNOWN;
+            bufferInfo.buffer = vkBuffer->buffer;
+            bufferInfo.offset = (VkDeviceSize)offset;
+            bufferInfo.range  = VK_WHOLE_SIZE;
+
+            write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet           = set;
+            write.descriptorType   = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.descriptorCount  = 1u;
+            write.pBufferInfo      = &bufferInfo;
+
+            vkUpdateDescriptorSets( vkDevice->device, 1u, &write, 0u, NULL );
+
+            vkSwapchain->slotBoundBuffers[vkSwapchain->acquiredSlot] = buffer;
+            vkSwapchain->slotBoundOffsets[vkSwapchain->acquiredSlot] = offset;
         }
-
-    bufferInfo.buffer = vkBuffer->buffer;
-    bufferInfo.offset = (VkDeviceSize)offset;
-    bufferInfo.range  = VK_WHOLE_SIZE;
-
-    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet           = set;
-    write.descriptorType   = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.descriptorCount  = 1u;
-    write.pBufferInfo      = &bufferInfo;
-
-    vkUpdateDescriptorSets( vkDevice->device, 1u, &write, 0u, NULL );
 
     // Descriptor Bind
     //----------------------------------------------------------
