@@ -128,6 +128,67 @@ jobs:
       - name: Run unit tests
         run: ctest --test-dir build --build-config Debug --output-on-failure
 
+  # --------------------------------------------------------------------
+  # Sanitizer Coverage
+  # --------------------------------------------------------------------
+  # GCC Address + UndefinedBehavior sanitizers over the same unit suite.
+  # The core build touches no graphics backend, so leaks reported here
+  # belong to rhio itself.
+  sanitize:
+    name: sanitize (gcc)
+    runs-on: ubuntu-latest
+
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      # --------------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------------
+      # Dependency Cache
+      # --------------------------------------------------------------
+      - name: Cache CPM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-sanitize-cpm-${{ hashFiles('package-lock.cmake', '**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-sanitize-cpm-
+            ${{ runner.os }}-cpm-
+
+      # --------------------------------------------------------------
+      # Configure
+      # --------------------------------------------------------------
+      - name: Configure sanitized core library
+        shell: bash
+        run: |
+          cmake -S . -B build-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCPM_SOURCE_CACHE="${CPM_SOURCE_CACHE}" \
+            -DRHIO_BUILD_TESTS=ON \
+            -DRHIO_BUILD_EXAMPLES=OFF \
+            -DRHIO_BACKEND_OPENGL=OFF \
+            -DRHIO_BACKEND_VULKAN=OFF \
+            -DUSE_SANITIZER="Address;Undefined" \
+            -DUSE_CCACHE=OFF
+
+      # --------------------------------------------------------------
+      # Build
+      # --------------------------------------------------------------
+      - name: Build sanitized tests
+        run: cmake --build build-sanitize --parallel
+
+      # --------------------------------------------------------------
+      # Test
+      # --------------------------------------------------------------
+      - name: Run sanitized unit tests
+        run: ctest --test-dir build-sanitize --build-config Debug --output-on-failure
+
       # --------------------------------------------------------------
       # Install Smoke Test
       # --------------------------------------------------------------
