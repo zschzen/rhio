@@ -4993,6 +4993,9 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 #                if __has_include( <X11/Xlib.h> )
 #                    define VK_USE_PLATFORM_XLIB_KHR
 #                endif
+#                if __has_include( <xcb/xcb.h> )
+#                    define VK_USE_PLATFORM_XCB_KHR
+#                endif
 #                if __has_include( <wayland-client.h> )
 #                    define VK_USE_PLATFORM_WAYLAND_KHR
 #                endif
@@ -5021,6 +5024,7 @@ typedef enum
     RI_VK_SURFACE_EXT_XLIB    = 1u << 1,
     RI_VK_SURFACE_EXT_WAYLAND = 1u << 2,
     RI_VK_SURFACE_EXT_METAL   = 1u << 3,
+    RI_VK_SURFACE_EXT_XCB     = 1u << 4,
 
 } riVK_SurfaceExtensionBits;
 
@@ -5112,10 +5116,11 @@ typedef enum riVK_CommandListState
 // Command queue implementation
 typedef struct riVK_CommandQueue
 {
-    riCommandQueueBase base;         // Frontend handle dispatch
-    riVK_Device *      device;       // Owning device state
-    VkCommandPool      commandPool;  // Pool backing all queue-owned command lists
-    riVK_CommandList * commandLists; // Queue-owned command list chain
+    riCommandQueueBase    base;         // Frontend handle dispatch
+    riVK_Device *         device;       // Owning device state
+    VkCommandPool         commandPool;  // Pool backing all queue-owned command lists
+    riVK_CommandList *    commandLists; // Queue-owned command list chain
+    struct riVK_Swapchain * frameTarget; // Acquired swapchain frame awaiting submit
 
 } riVK_CommandQueue;
 
@@ -5164,7 +5169,10 @@ typedef struct riVK_Swapchain
     riVK_Texture        textures[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Facade textures (inline)
     VkImageView         imageViews[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
     VkSemaphore         imageAvailable[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
-    VkSemaphore         renderFinished[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    // NOTE: One render-finished semaphore per swapchain image, not per frame
+    // slot: acquire only returns images whose previous presentation consumed
+    // their semaphore, so re-signaling is always safe
+    VkSemaphore         renderFinished[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
     VkFence             fences[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
     bool                fenceBusy[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
     VkDescriptorPool    descriptorPools[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // Per-slot SSBO sets
@@ -5233,6 +5241,24 @@ static riStatus _rhioVK_begin_render_pass( riCommandList commandList, const riRe
 static void _rhioVK_destroy_buffer( riBuffer buffer );
 static void _rhioVK_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo );
 
+// Swapchain
+static void     _rhioVK_destroy_swapchain( riSwapchain swapchain );
+static riStatus _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture );
+static riStatus _rhioVK_present( riSwapchain swapchain );
+
+// Swapchain internals
+static riStatus _rhioVK_create_surface( riVK_Device * vkDevice, const riSwapchainInfo * info,
+                                        VkSurfaceKHR * outSurface );
+static riStatus _rhioVK_pick_surface_format( riVK_Device * vkDevice, VkSurfaceKHR surface,
+                                             riTextureFormat requested, VkFormat * outFormat,
+                                             VkColorSpaceKHR * outColorSpace );
+static riStatus _rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain );
+static void     _rhioVK_destroy_swapchain_object( riVK_Swapchain * vkSwapchain );
+
+// Textures (swapchain facades; no application-owned textures yet)
+static void _rhioVK_destroy_texture_noop( riTexture texture );
+static void _rhioVK_get_texture_info( riTexture texture, riTextureInfo * outInfo );
+
 //----------------------------------------------------------------------------------
 // Vulkan Backend Vtable
 //----------------------------------------------------------------------------------
@@ -5241,6 +5267,7 @@ static const riDeviceVTable s_vk_vtable = {
     .init                 = _rhioVK_init,
     .shutdown             = _rhioVK_shutdown,
     .create_command_queue = _rhioVK_create_command_queue,
+    .create_swapchain     = _rhioVK_create_swapchain,
     .create_buffer        = _rhioVK_create_buffer,
 };
 
@@ -5262,6 +5289,17 @@ static const riCommandListVTable s_vk_command_list_vtable = {
 static const riBufferVTable s_vk_buffer_vtable = {
     .destroy_buffer  = _rhioVK_destroy_buffer,
     .get_buffer_info = _rhioVK_get_buffer_info,
+};
+
+static const riSwapchainVTable s_vk_swapchain_vtable = {
+    .destroy_swapchain   = _rhioVK_destroy_swapchain,
+    .get_current_texture = _rhioVK_get_current_texture,
+    .present             = _rhioVK_present,
+};
+
+static const riTextureVTable s_vk_texture_vtable = {
+    .destroy_texture  = _rhioVK_destroy_texture_noop,
+    .get_texture_info = _rhioVK_get_texture_info,
 };
 
 //----------------------------------------------------------------------------------
@@ -5478,6 +5516,7 @@ _rhioVK_surface_extension_mask( const riInstanceInfo * instanceInfo )
 
             if( strcmp( extension, "VK_KHR_win32_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_WIN32;
             else if( strcmp( extension, "VK_KHR_xlib_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_XLIB;
+            else if( strcmp( extension, "VK_KHR_xcb_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_XCB;
             else if( strcmp( extension, "VK_KHR_wayland_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_WAYLAND;
             else if( strcmp( extension, "VK_EXT_metal_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_METAL;
         }
@@ -6119,14 +6158,20 @@ _rhioVK_submit_command_list( riCommandQueue queue, riCommandList commandList )
 }
 
 // Submit command lists to the Vulkan graphics queue in caller-provided order
-// NOTE: Semaphore-driven submission lands with the swapchain milestone; the
-//       frame-in-flight fence guarding command buffer reuse is owned there
+// NOTE: One submit flushes the frame armed by rhioSwapchainGetCurrentTexture;
+//       a second submit before the matching present is rejected
 static riStatus
 _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitInfo * info )
 {
-    riVK_CommandQueue * vkQueue = (riVK_CommandQueue *)queue;
-    riVK_CommandList *  vkList  = NULL;
-    riU32               i       = 0u;
+    riVK_CommandQueue *         vkQueue        = (riVK_CommandQueue *)queue;
+    riVK_Swapchain *            vkSwapchain    = NULL;
+    riVK_CommandList *          vkList         = NULL;
+    VkSemaphoreSubmitInfo       waitInfo       = RI_ZERO_INIT;
+    VkSemaphoreSubmitInfo       signalInfo     = RI_ZERO_INIT;
+    VkCommandBufferSubmitInfo * cmdBufferInfos = NULL;
+    VkSubmitInfo2               submitInfo     = RI_ZERO_INIT;
+    VkResult                    result         = VK_SUCCESS;
+    riU32                       i              = 0u;
 
     RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
@@ -6146,9 +6191,74 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
             RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
         }
 
-    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Submission requires a swapchain target (pending milestone)" );
+    // Frame Target Authorization
+    //----------------------------------------------------------
+    vkSwapchain = vkQueue->frameTarget;
+    if( vkSwapchain == NULL || vkSwapchain->state != RI_VK_SWAPCHAIN_STATE_ACQUIRED )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: No acquired swapchain frame; call rhioSwapchainGetCurrentTexture first" );
+            return RI_ERROR_INVALID_STATE;
+        }
 
-    return RI_ERROR_BACKEND_UNAVAIL;
+    // Queue Submission (sync2)
+    //----------------------------------------------------------
+    // The submit waits for the acquire semaphore of the frame slot and signals
+    // the render-finished semaphore of the acquired image plus the slot fence
+    // guarding command buffer reuse
+    waitInfo.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    waitInfo.semaphore = vkSwapchain->imageAvailable[vkSwapchain->acquiredSlot];
+    // NOTE: ALL_COMMANDS instead of COLOR_ATTACHMENT_OUTPUT so empty frames
+    // (no render pass recorded yet) still signal their semaphores
+    waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+    signalInfo.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    signalInfo.semaphore = vkSwapchain->renderFinished[vkSwapchain->imageIndex];
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+    cmdBufferInfos = (VkCommandBufferSubmitInfo *)RI_MALLOC( (riSize)info->commandListCount * sizeof( *cmdBufferInfos ) );
+    if( RI_UNLIKELY( cmdBufferInfos == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    for( i = 0u; i < info->commandListCount; ++i )
+        {
+            cmdBufferInfos[i].sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+            cmdBufferInfos[i].commandBuffer = ( (riVK_CommandList *)info->commandLists[i] )->commandBuffer;
+        }
+
+    submitInfo.sType                   = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+    submitInfo.waitSemaphoreInfoCount  = 1u;
+    submitInfo.pWaitSemaphoreInfos     = &waitInfo;
+    submitInfo.commandBufferInfoCount  = info->commandListCount;
+    submitInfo.pCommandBufferInfos     = cmdBufferInfos;
+    submitInfo.signalSemaphoreInfoCount = 1u;
+    submitInfo.pSignalSemaphoreInfos   = &signalInfo;
+
+    result = vkQueueSubmit2( vkQueue->device->queue, 1u, &submitInfo,
+                             vkSwapchain->fences[vkSwapchain->acquiredSlot] );
+
+    RI_FREE( cmdBufferInfos );
+
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkQueueSubmit2 failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    // Frame State Transition
+    //----------------------------------------------------------
+    for( i = 0u; i < info->commandListCount; ++i )
+        {
+            vkList              = (riVK_CommandList *)info->commandLists[i];
+            vkList->state       = RI_VK_COMMAND_LIST_STATE_PENDING;
+            vkList->pendingSlot = vkSwapchain->acquiredSlot;
+        }
+
+    vkSwapchain->fenceBusy[vkSwapchain->acquiredSlot] = true;
+    vkQueue->frameTarget = NULL; // next submit waits for the matching present
+
+    return RI_SUCCESS;
 }
 
 //----------------------------------------------------------------------------------
@@ -6356,6 +6466,906 @@ _rhioVK_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo )
     RI_GUARD_VOID( outInfo != NULL );
 
     *outInfo = vkBuffer->info;
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Swapchain Implementation
+//----------------------------------------------------------------------------------
+
+// Create the native surface from the swapchain info handle union
+// NOTE: Each branch requires the matching instance extension bit resolved at
+//       device init plus the platform development headers at compile time
+static riStatus
+_rhioVK_create_surface( riVK_Device * vkDevice, const riSwapchainInfo * info, VkSurfaceKHR * outSurface )
+{
+    VkResult result = VK_SUCCESS;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outSurface != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Xlib Surface
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_X11 )
+        {
+#            if defined( VK_USE_PLATFORM_XLIB_KHR )
+            if( RI_FLAG_CHECK( vkDevice->surfaceExtensions, RI_VK_SURFACE_EXT_XLIB ) != 0u )
+                {
+                    VkXlibSurfaceCreateInfoKHR surfaceInfo = RI_ZERO_INIT;
+
+                    surfaceInfo.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+                    surfaceInfo.dpy    = (Display *)info->handle.x11.display;
+                    surfaceInfo.window = (Window)info->handle.x11.window;
+
+                    result = vkCreateXlibSurfaceKHR( vkDevice->instance, &surfaceInfo, NULL, outSurface );
+                    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateXlibSurfaceKHR failed (%d)", (int)result );
+                            return RI_ERROR_BACKEND_INIT;
+                        }
+
+                    return RI_SUCCESS;
+                }
+
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Instance lacks VK_KHR_xlib_surface" );
+#            else
+            UNUSED( result );
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Xlib development headers unavailable at compile time" );
+#            endif
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // XCB Surface
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_XCB )
+        {
+#            if defined( VK_USE_PLATFORM_XCB_KHR )
+            if( RI_FLAG_CHECK( vkDevice->surfaceExtensions, RI_VK_SURFACE_EXT_XCB ) != 0u )
+                {
+                    VkXcbSurfaceCreateInfoKHR surfaceInfo = RI_ZERO_INIT;
+
+                    surfaceInfo.sType     = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
+                    surfaceInfo.connection = (xcb_connection_t *)info->handle.xcb.connection;
+                    surfaceInfo.window    = (xcb_window_t)info->handle.xcb.window;
+
+                    result = vkCreateXcbSurfaceKHR( vkDevice->instance, &surfaceInfo, NULL, outSurface );
+                    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateXcbSurfaceKHR failed (%d)", (int)result );
+                            return RI_ERROR_BACKEND_INIT;
+                        }
+
+                    return RI_SUCCESS;
+                }
+
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Instance lacks VK_KHR_xcb_surface" );
+#            else
+            UNUSED( result );
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: XCB development headers unavailable at compile time" );
+#            endif
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Wayland Surface
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_WAYLAND )
+        {
+#            if defined( VK_USE_PLATFORM_WAYLAND_KHR )
+            if( RI_FLAG_CHECK( vkDevice->surfaceExtensions, RI_VK_SURFACE_EXT_WAYLAND ) != 0u )
+                {
+                    VkWaylandSurfaceCreateInfoKHR surfaceInfo = RI_ZERO_INIT;
+
+                    surfaceInfo.sType   = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+                    surfaceInfo.display = (wl_display *)info->handle.wayland.display;
+                    surfaceInfo.surface = (wl_surface *)info->handle.wayland.surface;
+
+                    result = vkCreateWaylandSurfaceKHR( vkDevice->instance, &surfaceInfo, NULL, outSurface );
+                    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateWaylandSurfaceKHR failed (%d)", (int)result );
+                            return RI_ERROR_BACKEND_INIT;
+                        }
+
+                    return RI_SUCCESS;
+                }
+
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Instance lacks VK_KHR_wayland_surface" );
+#            else
+            UNUSED( result );
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Wayland development headers unavailable at compile time" );
+#            endif
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Win32 Surface
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_HWND )
+        {
+#            if defined( VK_USE_PLATFORM_WIN32_KHR )
+            if( RI_FLAG_CHECK( vkDevice->surfaceExtensions, RI_VK_SURFACE_EXT_WIN32 ) != 0u )
+                {
+                    VkWin32SurfaceCreateInfoKHR surfaceInfo = RI_ZERO_INIT;
+
+                    surfaceInfo.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+                    surfaceInfo.hinstance = (HINSTANCE)info->handle.hwnd.instance;
+                    surfaceInfo.hwnd      = (HWND)info->handle.hwnd.window;
+
+                    result = vkCreateWin32SurfaceKHR( vkDevice->instance, &surfaceInfo, NULL, outSurface );
+                    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateWin32SurfaceKHR failed (%d)", (int)result );
+                            return RI_ERROR_BACKEND_INIT;
+                        }
+
+                    return RI_SUCCESS;
+                }
+
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Instance lacks VK_KHR_win32_surface" );
+#            else
+            UNUSED( result );
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Win32 development headers unavailable at compile time" );
+#            endif
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Metal Surface
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_METAL_LAYER )
+        {
+#            if defined( VK_USE_PLATFORM_METAL_EXT )
+            if( RI_FLAG_CHECK( vkDevice->surfaceExtensions, RI_VK_SURFACE_EXT_METAL ) != 0u )
+                {
+                    VkMetalSurfaceCreateInfoEXT surfaceInfo = RI_ZERO_INIT;
+
+                    surfaceInfo.sType  = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+                    surfaceInfo.pLayer = info->handle.metalLayer;
+
+                    result = vkCreateMetalSurfaceEXT( vkDevice->instance, &surfaceInfo, NULL, outSurface );
+                    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateMetalSurfaceEXT failed (%d)", (int)result );
+                            return RI_ERROR_BACKEND_INIT;
+                        }
+
+                    return RI_SUCCESS;
+                }
+
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Instance lacks VK_EXT_metal_surface" );
+#            else
+            UNUSED( result );
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Metal surface is only available on Apple platforms" );
+#            endif
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Headless swapchains are not supported yet" );
+
+    return RI_ERROR_BACKEND_UNAVAIL;
+}
+
+// Pick the surface format matching the requested public format
+static riStatus
+_rhioVK_pick_surface_format( riVK_Device * vkDevice, VkSurfaceKHR surface, riTextureFormat requested,
+                             VkFormat * outFormat, VkColorSpaceKHR * outColorSpace )
+{
+    VkSurfaceFormatKHR * formats       = NULL;
+    riU32                count         = 0u;
+    VkResult             result        = VK_SUCCESS;
+    riTextureFormat      mapped        = RHIO_TEXTURE_FORMAT_UNDEFINED;
+    VkFormat             requestedVk   = VK_FORMAT_UNDEFINED;
+    riU32                i             = 0u;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( surface != VK_NULL_HANDLE, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outFormat != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outColorSpace != NULL, RI_ERROR_INVALID_PARAM );
+
+    result = vkGetPhysicalDeviceSurfaceFormatsKHR( vkDevice->physicalDevice, surface, &count, NULL );
+    if( RI_UNLIKELY( result != VK_SUCCESS || count == 0u ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Surface exposes no formats (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    formats = (VkSurfaceFormatKHR *)RI_MALLOC( (riSize)count * sizeof( *formats ) );
+    if( RI_UNLIKELY( formats == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    result = vkGetPhysicalDeviceSurfaceFormatsKHR( vkDevice->physicalDevice, surface, &count, formats );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            RI_FREE( formats );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Requested Format
+    //----------------------------------------------------------
+    if( requested != RHIO_TEXTURE_FORMAT_UNDEFINED
+        && _rhioVK_format_to_vk( requested, &requestedVk ) == RI_SUCCESS )
+        {
+            for( i = 0u; i < count; ++i )
+                {
+                    if( formats[i].format == requestedVk
+                        && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR )
+                        {
+                            *outFormat     = requestedVk;
+                            *outColorSpace = formats[i].colorSpace;
+                            RI_FREE( formats );
+                            return RI_SUCCESS;
+                        }
+                }
+        }
+
+    // Display-Preferred Fallback
+    //----------------------------------------------------------
+    // BGRA 8-bit is the most widely supported display format
+    for( i = 0u; i < count; ++i )
+        {
+            if( formats[i].format == VK_FORMAT_B8G8R8A8_UNORM
+                && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR )
+                {
+                    *outFormat     = formats[i].format;
+                    *outColorSpace = formats[i].colorSpace;
+                    RI_FREE( formats );
+                    return RI_SUCCESS;
+                }
+        }
+
+    // First Mappable Entry
+    //----------------------------------------------------------
+    for( i = 0u; i < count; ++i )
+        {
+            if( _rhioVK_format_from_vk( formats[i].format, &mapped ) == RI_SUCCESS )
+                {
+                    *outFormat     = formats[i].format;
+                    *outColorSpace = formats[i].colorSpace;
+                    RI_FREE( formats );
+                    return RI_SUCCESS;
+                }
+        }
+
+    *outFormat     = formats[0].format;
+    *outColorSpace = formats[0].colorSpace;
+
+    RI_FREE( formats );
+
+    return RI_SUCCESS;
+}
+
+// Create or recreate the swapchain object and its per-image resources
+// NOTE: The picked format persists across recreates so pipelines built on it
+//       stay valid when the window is resized
+static riStatus
+_rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain )
+{
+    riVK_Device *                  vkDevice     = vkSwapchain->device;
+    VkSurfaceCapabilitiesKHR       caps         = RI_ZERO_INIT;
+    VkSwapchainCreateInfoKHR       createInfo   = RI_ZERO_INIT;
+    VkImage                        images[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
+    VkImageViewCreateInfo          viewInfo     = RI_ZERO_INIT;
+    VkSwapchainKHR                 oldSwapchain = vkSwapchain->swapchain;
+    VkResult                       result       = VK_SUCCESS;
+    riU32                          imageCount   = 0u;
+    riU32                          i            = 0u;
+
+    // Surface Capability Query
+    //----------------------------------------------------------
+    result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR( vkDevice->physicalDevice, vkSwapchain->surface, &caps );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Extent Resolution
+    //----------------------------------------------------------
+    if( caps.currentExtent.width != UINT32_MAX )
+        {
+            vkSwapchain->extent = caps.currentExtent;
+        }
+    else
+        {
+            vkSwapchain->extent.width  = vkSwapchain->info.width;
+            vkSwapchain->extent.height = vkSwapchain->info.height;
+
+            if( vkSwapchain->extent.width < caps.minImageExtent.width ) vkSwapchain->extent.width = caps.minImageExtent.width;
+            if( vkSwapchain->extent.width > caps.maxImageExtent.width ) vkSwapchain->extent.width = caps.maxImageExtent.width;
+            if( vkSwapchain->extent.height < caps.minImageExtent.height ) vkSwapchain->extent.height = caps.minImageExtent.height;
+            if( vkSwapchain->extent.height > caps.maxImageExtent.height ) vkSwapchain->extent.height = caps.maxImageExtent.height;
+        }
+
+    // Image Count
+    //----------------------------------------------------------
+    imageCount = caps.minImageCount + 1u;
+    if( caps.maxImageCount != 0u && imageCount > caps.maxImageCount )
+        {
+            imageCount = caps.maxImageCount;
+        }
+    if( imageCount > RHIO_VK_MAX_SWAPCHAIN_IMAGES )
+        {
+            imageCount = RHIO_VK_MAX_SWAPCHAIN_IMAGES;
+        }
+    if( caps.minImageCount > RHIO_VK_MAX_SWAPCHAIN_IMAGES )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Surface requires %u images, rhio supports up to %u",
+                      (unsigned)caps.minImageCount, (unsigned)RHIO_VK_MAX_SWAPCHAIN_IMAGES );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Format Selection
+    //----------------------------------------------------------
+    if( vkSwapchain->format == VK_FORMAT_UNDEFINED )
+        {
+            riStatus status = _rhioVK_pick_surface_format( vkDevice, vkSwapchain->surface, vkSwapchain->info.format,
+                                                           &vkSwapchain->format, &vkSwapchain->colorSpace );
+            if( RI_FAILED( status ) ) return status;
+        }
+
+    // Swapchain Creation
+    //----------------------------------------------------------
+    createInfo.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    createInfo.surface          = vkSwapchain->surface;
+    createInfo.minImageCount    = imageCount;
+    createInfo.imageFormat      = vkSwapchain->format;
+    createInfo.imageColorSpace  = vkSwapchain->colorSpace;
+    createInfo.imageExtent      = vkSwapchain->extent;
+    createInfo.imageArrayLayers = 1u;
+    createInfo.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    createInfo.preTransform     = caps.currentTransform;
+    createInfo.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    createInfo.presentMode      = VK_PRESENT_MODE_FIFO_KHR;
+    createInfo.clipped          = VK_TRUE;
+    createInfo.oldSwapchain     = oldSwapchain;
+
+    result = vkCreateSwapchainKHR( vkDevice->device, &createInfo, NULL, &vkSwapchain->swapchain );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateSwapchainKHR failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Old Swapchain Teardown
+    //----------------------------------------------------------
+    // With oldSwapchain chained, the previous object dies only after the new
+    // one is live; its views must go first because the images die with it
+    if( oldSwapchain != VK_NULL_HANDLE )
+        {
+            for( i = 0u; i < vkSwapchain->imageCount; ++i )
+                {
+                    if( vkSwapchain->imageViews[i] != VK_NULL_HANDLE )
+                        {
+                            vkDestroyImageView( vkDevice->device, vkSwapchain->imageViews[i], NULL );
+                            vkSwapchain->imageViews[i] = VK_NULL_HANDLE;
+                        }
+                }
+
+            vkDestroySwapchainKHR( vkDevice->device, oldSwapchain, NULL );
+        }
+
+    // Image Handles and Views
+    //----------------------------------------------------------
+    result = vkGetSwapchainImagesKHR( vkDevice->device, vkSwapchain->swapchain, &imageCount, images );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkGetSwapchainImagesKHR failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Facades beyond the new image count are cleared on shrink
+    for( i = imageCount; i < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++i )
+        {
+            if( vkSwapchain->imageViews[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroyImageView( vkDevice->device, vkSwapchain->imageViews[i], NULL );
+                    vkSwapchain->imageViews[i] = VK_NULL_HANDLE;
+                }
+
+            memset( &vkSwapchain->textures[i], 0, sizeof( riVK_Texture ) );
+        }
+
+    vkSwapchain->imageCount = imageCount;
+
+    viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format   = vkSwapchain->format;
+    viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel   = 0u;
+    viewInfo.subresourceRange.levelCount     = 1u;
+    viewInfo.subresourceRange.baseArrayLayer = 0u;
+    viewInfo.subresourceRange.layerCount     = 1u;
+
+    for( i = 0u; i < imageCount; ++i )
+        {
+            // Image View
+            //----------------------------------------------------------
+            viewInfo.image = images[i];
+
+            result = vkCreateImageView( vkDevice->device, &viewInfo, NULL, &vkSwapchain->imageViews[i] );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateImageView failed (%d)", (int)result );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            // Facade Texture
+            //----------------------------------------------------------
+            memset( &vkSwapchain->textures[i], 0, sizeof( riVK_Texture ) );
+            vkSwapchain->textures[i].base.vtable     = &s_vk_texture_vtable;
+            vkSwapchain->textures[i].image           = images[i];
+            vkSwapchain->textures[i].isSwapchainImage = true;
+            vkSwapchain->textures[i].swapchain       = vkSwapchain;
+            vkSwapchain->textures[i].info.width      = vkSwapchain->extent.width;
+            vkSwapchain->textures[i].info.height     = vkSwapchain->extent.height;
+            vkSwapchain->textures[i].info.depth      = 1u;
+            vkSwapchain->textures[i].info.mipLevels  = 1u;
+            vkSwapchain->textures[i].info.arrayLayers = 1u;
+            vkSwapchain->textures[i].info.usage      = RI_TEXTURE_USAGE_RENDER_TARGET;
+            vkSwapchain->textures[i].info.dimensions = RI_TEXTURE_DIMENSIONS_2D;
+            vkSwapchain->textures[i].info.name       = "swapchain image";
+            vkSwapchain->textures[i].info.format     = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+            (void)_rhioVK_format_from_vk( vkSwapchain->format, &vkSwapchain->textures[i].info.format );
+        }
+
+    vkSwapchain->state = RI_VK_SWAPCHAIN_STATE_IDLE;
+
+    return RI_SUCCESS;
+}
+
+// Destroy the swapchain object and its image views; the surface survives
+static void
+_rhioVK_destroy_swapchain_object( riVK_Swapchain * vkSwapchain )
+{
+    riVK_Device * vkDevice = vkSwapchain->device;
+    riU32         i        = 0u;
+
+    for( i = 0u; i < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++i )
+        {
+            if( vkSwapchain->imageViews[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroyImageView( vkDevice->device, vkSwapchain->imageViews[i], NULL );
+                    vkSwapchain->imageViews[i] = VK_NULL_HANDLE;
+                }
+
+            memset( &vkSwapchain->textures[i], 0, sizeof( riVK_Texture ) );
+        }
+
+    if( vkSwapchain->swapchain != VK_NULL_HANDLE )
+        {
+            vkDestroySwapchainKHR( vkDevice->device, vkSwapchain->swapchain, NULL );
+            vkSwapchain->swapchain = VK_NULL_HANDLE;
+        }
+
+    vkSwapchain->imageCount = 0u;
+}
+
+// Release the per-slot sync primitives and descriptor pools of a swapchain
+static void
+_rhioVK_destroy_swapchain_sync( riVK_Swapchain * vkSwapchain )
+{
+    riVK_Device * vkDevice = vkSwapchain->device;
+    riU32         i        = 0u;
+
+    for( i = 0u; i < RHIO_VK_MAX_FRAMES_IN_FLIGHT; ++i )
+        {
+            if( vkSwapchain->imageAvailable[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroySemaphore( vkDevice->device, vkSwapchain->imageAvailable[i], NULL );
+                    vkSwapchain->imageAvailable[i] = VK_NULL_HANDLE;
+                }
+
+            if( vkSwapchain->fences[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroyFence( vkDevice->device, vkSwapchain->fences[i], NULL );
+                    vkSwapchain->fences[i] = VK_NULL_HANDLE;
+                }
+
+            if( vkSwapchain->descriptorPools[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroyDescriptorPool( vkDevice->device, vkSwapchain->descriptorPools[i], NULL );
+                    vkSwapchain->descriptorPools[i] = VK_NULL_HANDLE;
+                }
+        }
+
+    for( i = 0u; i < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++i )
+        {
+            if( vkSwapchain->renderFinished[i] != VK_NULL_HANDLE )
+                {
+                    vkDestroySemaphore( vkDevice->device, vkSwapchain->renderFinished[i], NULL );
+                    vkSwapchain->renderFinished[i] = VK_NULL_HANDLE;
+                }
+        }
+}
+
+// Create a swapchain over the native window surface from the creation info
+static riStatus
+_rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapchainInfo * info,
+                          riSwapchain * outSwapchain )
+{
+    riVK_Device *         vkDevice     = (riVK_Device *)device;
+    riVK_CommandQueue *   vkQueue      = (riVK_CommandQueue *)queue;
+    riVK_Swapchain *      vkSwapchain  = NULL;
+    const riFlags         validPresentFlags = RI_SWAPCHAIN_PRESENT_FLAG_FORCE_FLUSH;
+    VkSemaphoreCreateInfo semaphoreInfo = RI_ZERO_INIT;
+    VkFenceCreateInfo     fenceInfo     = RI_ZERO_INIT;
+    VkDescriptorPoolSize  poolSize      = RI_ZERO_INIT;
+    VkDescriptorPoolCreateInfo poolInfo = RI_ZERO_INIT;
+    VkBool32              presentSupported = VK_FALSE;
+    riU32                 slot          = 0u;
+    VkResult              result        = VK_SUCCESS;
+    riStatus              status        = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outSwapchain != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->width > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->height > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( RI_FLAG_CHECK( info->presentFlags, ~validPresentFlags ) == 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkQueue->device == vkDevice, RI_ERROR_INVALID_PARAM );
+
+    // Headless Swapchains
+    //----------------------------------------------------------
+    if( info->handleType == RHIO_SWAPCHAIN_HANDLE_TYPE_NONE )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Headless swapchains are not supported yet" );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Swapchain Allocation
+    //----------------------------------------------------------
+    vkSwapchain = (riVK_Swapchain *)RI_CALLOC( 1, sizeof( *vkSwapchain ) );
+    if( RI_UNLIKELY( vkSwapchain == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    vkSwapchain->base.vtable = &s_vk_swapchain_vtable;
+    vkSwapchain->info        = *info;
+    vkSwapchain->device      = vkDevice;
+    vkSwapchain->queue       = vkQueue;
+    vkSwapchain->state       = RI_VK_SWAPCHAIN_STATE_IDLE;
+    vkSwapchain->format      = VK_FORMAT_UNDEFINED;
+    vkSwapchain->colorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    vkSwapchain->extent.width  = info->width;
+    vkSwapchain->extent.height = info->height;
+
+    // Frame Depth
+    //----------------------------------------------------------
+    vkSwapchain->frameSlotCount = info->maxFramesInFlight != 0u ? info->maxFramesInFlight
+                                                                : RHIO_VK_MAX_FRAMES_IN_FLIGHT;
+    if( vkSwapchain->frameSlotCount > RHIO_VK_MAX_FRAMES_IN_FLIGHT )
+        {
+            vkSwapchain->frameSlotCount = RHIO_VK_MAX_FRAMES_IN_FLIGHT;
+        }
+
+    // Native Surface
+    //----------------------------------------------------------
+    status = _rhioVK_create_surface( vkDevice, info, &vkSwapchain->surface );
+    if( RI_FAILED( status ) )
+        {
+            RI_FREE( vkSwapchain );
+            return status;
+        }
+
+    // Present Support
+    //----------------------------------------------------------
+    result = vkGetPhysicalDeviceSurfaceSupportKHR( vkDevice->physicalDevice, vkDevice->queueFamily,
+                                                   vkSwapchain->surface, &presentSupported );
+    if( RI_UNLIKELY( result != VK_SUCCESS || presentSupported == VK_FALSE ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Graphics queue does not support presentation (%d)", (int)result );
+            vkDestroySurfaceKHR( vkDevice->instance, vkSwapchain->surface, NULL );
+            RI_FREE( vkSwapchain );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Per-Slot Synchronization
+    //----------------------------------------------------------
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    fenceInfo.sType     = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    for( slot = 0u; slot < vkSwapchain->frameSlotCount; ++slot )
+        {
+            if( result != VK_SUCCESS ) break;
+
+            result = vkCreateSemaphore( vkDevice->device, &semaphoreInfo, NULL,
+                                        &vkSwapchain->imageAvailable[slot] );
+            if( result != VK_SUCCESS ) break;
+
+            result = vkCreateFence( vkDevice->device, &fenceInfo, NULL, &vkSwapchain->fences[slot] );
+        }
+
+    // Render-Finished Semaphores
+    //----------------------------------------------------------
+    // One per possible swapchain image, created up front so recreation never
+    // has to grow or shrink the semaphore set
+    for( slot = 0u; slot < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++slot )
+        {
+            if( result == VK_SUCCESS )
+                {
+                    result = vkCreateSemaphore( vkDevice->device, &semaphoreInfo, NULL,
+                                                &vkSwapchain->renderFinished[slot] );
+                }
+        }
+
+    // Descriptor Pools
+    //----------------------------------------------------------
+    // One pool per frame slot, reset between frames of the same slot
+    poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize.descriptorCount = RHIO_VK_DESCRIPTOR_SETS_PER_FRAME;
+
+    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets       = RHIO_VK_DESCRIPTOR_SETS_PER_FRAME;
+    poolInfo.poolSizeCount = 1u;
+    poolInfo.pPoolSizes    = &poolSize;
+
+    for( slot = 0u; slot < vkSwapchain->frameSlotCount && result == VK_SUCCESS; ++slot )
+        {
+            result = vkCreateDescriptorPool( vkDevice->device, &poolInfo, NULL,
+                                             &vkSwapchain->descriptorPools[slot] );
+        }
+
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: swapchain sync creation failed (%d)", (int)result );
+            _rhioVK_destroy_swapchain_sync( vkSwapchain );
+            vkDestroySurfaceKHR( vkDevice->instance, vkSwapchain->surface, NULL );
+            RI_FREE( vkSwapchain );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Swapchain Object
+    //----------------------------------------------------------
+    status = _rhioVK_create_swapchain_object( vkSwapchain );
+    if( RI_FAILED( status ) )
+        {
+            _rhioVK_destroy_swapchain_object( vkSwapchain );
+            _rhioVK_destroy_swapchain_sync( vkSwapchain );
+            vkDestroySurfaceKHR( vkDevice->instance, vkSwapchain->surface, NULL );
+            RI_FREE( vkSwapchain );
+            return status;
+        }
+
+    _rhioVK_set_object_name( vkDevice, VK_OBJECT_TYPE_SWAPCHAIN_KHR, (riU64)vkSwapchain->swapchain,
+                             "rhio swapchain" );
+
+    TRACELOG( RI_LOG_INFO, "BACKEND VK: Swapchain %ux%u, %u images, format %d",
+              (unsigned)vkSwapchain->extent.width, (unsigned)vkSwapchain->extent.height,
+              (unsigned)vkSwapchain->imageCount, (int)vkSwapchain->format );
+
+    // Swapchain Handle Handoff
+    //----------------------------------------------------------
+    *outSwapchain = (riSwapchain)vkSwapchain;
+
+    return RI_SUCCESS;
+}
+
+// Flip lists whose frame-in-flight fence has fired and recycle their pools
+// NOTE: Runs on every acquire. With blocking=true the acquire serializes on
+//       every pending frame's completion, which keeps the single-command-list
+//       frame loop (reset + begin per frame) valid like the GL backend. True
+//       frames-in-flight pipelining needs one list per slot and blocking=false
+static void
+_rhioVK_reap_slots( riVK_Swapchain * vkSwapchain, bool blocking )
+{
+    riVK_CommandList * cursor = NULL;
+    riU32              slot   = 0u;
+
+    for( slot = 0u; slot < vkSwapchain->frameSlotCount; ++slot )
+        {
+            if( !vkSwapchain->fenceBusy[slot] ) continue;
+
+            if( vkGetFenceStatus( vkSwapchain->device->device, vkSwapchain->fences[slot] ) != VK_SUCCESS )
+                {
+                    if( !blocking ) continue;
+
+                    if( RI_UNLIKELY( vkWaitForFences( vkSwapchain->device->device, 1u,
+                                                      &vkSwapchain->fences[slot], VK_TRUE,
+                                                      UINT64_MAX ) != VK_SUCCESS ) )
+                        {
+                            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkWaitForFences failed during reap" );
+                            continue;
+                        }
+                }
+
+            for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
+                {
+                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING && cursor->pendingSlot == slot )
+                        {
+                            cursor->state = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                        }
+                }
+
+            vkResetDescriptorPool( vkSwapchain->device->device, vkSwapchain->descriptorPools[slot], 0 );
+
+            vkResetFences( vkSwapchain->device->device, 1u, &vkSwapchain->fences[slot] );
+
+            vkSwapchain->fenceBusy[slot] = false;
+        }
+}
+
+// Acquire the current backbuffer texture; the texture is swapchain-owned
+static riStatus
+_rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
+{
+    riVK_Swapchain *   vkSwapchain = (riVK_Swapchain *)swapchain;
+    VkResult           result      = VK_SUCCESS;
+    riU32              slot        = 0u;
+    riU32              attempts    = 0u;
+    riStatus           status      = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTexture != NULL, RI_ERROR_INVALID_PARAM );
+    if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
+    RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
+
+    // Stale Swapchain Recreation
+    //----------------------------------------------------------
+    if( vkSwapchain->needsRecreate )
+        {
+            _rhioVK_destroy_swapchain_object( vkSwapchain );
+
+            status = _rhioVK_create_swapchain_object( vkSwapchain );
+            if( RI_FAILED( status ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Swapchain recreation failed" );
+                    return status;
+                }
+        }
+
+    // Completed-Frame Reaping
+    //----------------------------------------------------------
+    // Blocking reap: waits every pending frame's fence so submitted lists are
+    // re-recordable and their descriptor pools recyclable, exactly like the
+    // synchronous GL execution model
+    _rhioVK_reap_slots( vkSwapchain, true );
+
+    slot = vkSwapchain->frameCounter % vkSwapchain->frameSlotCount;
+
+    // Backbuffer Acquire
+    //----------------------------------------------------------
+    // OUT_OF_DATE triggers one recreate-then-retry cycle; SUBOPTIMAL renders
+    // this frame and recreates before the next one
+    for( attempts = 0u; attempts < 2u; ++attempts )
+        {
+            result = vkAcquireNextImageKHR( vkSwapchain->device->device, vkSwapchain->swapchain, UINT64_MAX,
+                                            vkSwapchain->imageAvailable[slot], VK_NULL_HANDLE,
+                                            &vkSwapchain->imageIndex );
+            if( result != VK_ERROR_OUT_OF_DATE_KHR ) break;
+
+            _rhioVK_destroy_swapchain_object( vkSwapchain );
+
+            status = _rhioVK_create_swapchain_object( vkSwapchain );
+            if( RI_FAILED( status ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Swapchain recreation failed" );
+                    return status;
+                }
+        }
+
+    if( result == VK_ERROR_OUT_OF_DATE_KHR )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Swapchain keeps reporting OUT_OF_DATE" );
+            return RI_ERROR_SURFACE_LOST;
+        }
+
+    if( result == VK_ERROR_SURFACE_LOST_KHR )
+        {
+            vkSwapchain->state = RI_VK_SWAPCHAIN_STATE_LOST;
+            return RI_ERROR_SURFACE_LOST;
+        }
+
+    if( RI_UNLIKELY( result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAcquireNextImageKHR failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    vkSwapchain->needsRecreate = result == VK_SUBOPTIMAL_KHR ? true : vkSwapchain->needsRecreate;
+
+    // Frame Arming
+    //----------------------------------------------------------
+    vkSwapchain->acquiredSlot = slot;
+    vkSwapchain->state        = RI_VK_SWAPCHAIN_STATE_ACQUIRED;
+    vkSwapchain->queue->frameTarget = vkSwapchain;
+
+    *outTexture = (riTexture)&vkSwapchain->textures[vkSwapchain->imageIndex];
+
+    return RI_SUCCESS;
+}
+
+// Present the rendered frame through the swapchain
+static riStatus
+_rhioVK_present( riSwapchain swapchain )
+{
+    riVK_Swapchain * vkSwapchain = (riVK_Swapchain *)swapchain;
+    VkPresentInfoKHR presentInfo = RI_ZERO_INIT;
+    VkResult         result      = VK_SUCCESS;
+
+    RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_PARAM );
+    if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
+    RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
+
+    // Queue Presentation
+    //----------------------------------------------------------
+    presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1u;
+    presentInfo.pWaitSemaphores    = &vkSwapchain->renderFinished[vkSwapchain->imageIndex];
+    presentInfo.swapchainCount     = 1u;
+    presentInfo.pSwapchains        = &vkSwapchain->swapchain;
+    presentInfo.pImageIndices      = &vkSwapchain->imageIndex;
+
+    result = vkQueuePresentKHR( vkSwapchain->queue->device->queue, &presentInfo );
+
+    if( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR )
+        {
+            vkSwapchain->needsRecreate = true;
+        }
+    else if( result == VK_ERROR_SURFACE_LOST_KHR )
+        {
+            vkSwapchain->state = RI_VK_SWAPCHAIN_STATE_LOST;
+            return RI_ERROR_SURFACE_LOST;
+        }
+    else if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkQueuePresentKHR failed (%d)", (int)result );
+            return RI_ERROR_INVALID_STATE;
+        }
+
+    // Frame Advance
+    //----------------------------------------------------------
+    vkSwapchain->frameCounter++;
+    vkSwapchain->state = RI_VK_SWAPCHAIN_STATE_IDLE;
+
+    return RI_SUCCESS;
+}
+
+// Destroy the swapchain, its sync primitives and its surface
+static void
+_rhioVK_destroy_swapchain( riSwapchain swapchain )
+{
+    riVK_Swapchain * vkSwapchain = (riVK_Swapchain *)swapchain;
+
+    RI_GUARD_VOID( vkSwapchain != NULL );
+
+    // Frames referencing swapchain images must be complete first
+    vkDeviceWaitIdle( vkSwapchain->device->device );
+
+    if( vkSwapchain->queue != NULL && vkSwapchain->queue->frameTarget == vkSwapchain )
+        {
+            vkSwapchain->queue->frameTarget = NULL;
+        }
+
+    _rhioVK_destroy_swapchain_object( vkSwapchain );
+    _rhioVK_destroy_swapchain_sync( vkSwapchain );
+
+    if( vkSwapchain->surface != VK_NULL_HANDLE )
+        {
+            vkDestroySurfaceKHR( vkSwapchain->device->instance, vkSwapchain->surface, NULL );
+            vkSwapchain->surface = VK_NULL_HANDLE;
+        }
+}
+
+// Swapchain facade textures are swapchain-owned; destroying them is a no-op
+static void
+_rhioVK_destroy_texture_noop( riTexture texture )
+{
+    UNUSED( texture );
+}
+
+// Get the normalized metadata of a swapchain facade texture
+static void
+_rhioVK_get_texture_info( riTexture texture, riTextureInfo * outInfo )
+{
+    riVK_Texture * vkTexture = (riVK_Texture *)texture;
+
+    if( vkTexture != NULL && outInfo != NULL )
+        {
+            *outInfo = vkTexture->info;
+        }
 }
 
 //----------------------------------------------------------------------------------
