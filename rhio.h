@@ -6011,9 +6011,6 @@ _rhioVK_create_command_queue( riDevice device, riCommandQueue * outQueue )
     VkCommandPoolCreateInfo   poolInfo = RI_ZERO_INIT;
     VkResult                  result   = VK_SUCCESS;
 
-    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outQueue != NULL, RI_ERROR_INVALID_PARAM );
-
     // Queue Allocation
     //----------------------------------------------------------
     vkQueue = (riVK_CommandQueue *)RI_CALLOC( 1, sizeof( *vkQueue ) );
@@ -6100,9 +6097,6 @@ _rhioVK_create_command_list( riCommandQueue queue, riCommandList * outCommandLis
     riVK_CommandList *          vkList    = NULL;
     VkCommandBufferAllocateInfo allocInfo = RI_ZERO_INIT;
     VkResult                    result    = VK_SUCCESS;
-
-    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outCommandList != NULL, RI_ERROR_INVALID_PARAM );
 
     // Command List Allocation
     //----------------------------------------------------------
@@ -6287,9 +6281,6 @@ _rhioVK_submit_command_list( riCommandQueue queue, riCommandList commandList )
 {
     riCommandQueueSubmitInfo submitInfo = RI_ZERO_INIT;
 
-    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
-
     submitInfo.commandLists     = &commandList;
     submitInfo.commandListCount = 1u;
 
@@ -6313,19 +6304,12 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     riU32                       waitCount      = 0u;
     riU32                       i              = 0u;
 
-    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info->commandLists != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info->commandListCount > 0u, RI_ERROR_INVALID_PARAM );
-
     // Submit Validation
     //----------------------------------------------------------
     // Validate the full batch before submitting any command list so a malformed
     // batch cannot partially submit
     for( i = 0u; i < info->commandListCount; ++i )
         {
-            RI_GUARD( info->commandLists[i] != NULL, RI_ERROR_INVALID_PARAM );
-
             vkList = (riVK_CommandList *)info->commandLists[i];
             RI_GUARD( vkList->queue == vkQueue, RI_ERROR_INVALID_PARAM );
             RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
@@ -6454,9 +6438,6 @@ _rhioVK_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * ou
     VmaAllocationCreateInfo allocInfo  = RI_ZERO_INIT;
     VkResult                result     = VK_SUCCESS;
 
-    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outBuffer != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->size > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( info->usage, ~validUsage ) == 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( info->usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
@@ -6638,9 +6619,6 @@ static void
 _rhioVK_get_buffer_info( riBuffer buffer, riBufferInfo * outInfo )
 {
     riVK_Buffer * vkBuffer = (riVK_Buffer *)buffer;
-
-    RI_GUARD_VOID( vkBuffer != NULL );
-    RI_GUARD_VOID( outInfo != NULL );
 
     *outInfo = vkBuffer->info;
 }
@@ -7205,10 +7183,6 @@ _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
     VkResult              result        = VK_SUCCESS;
     riStatus              status        = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outSwapchain != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->height > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( info->presentFlags, ~validPresentFlags ) == 0u, RI_ERROR_INVALID_PARAM );
@@ -7412,8 +7386,6 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
     riU32              attempts    = 0u;
     riStatus           status      = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outTexture != NULL, RI_ERROR_INVALID_PARAM );
     if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
 
@@ -7521,7 +7493,6 @@ _rhioVK_present( riSwapchain swapchain )
     VkPresentInfoKHR presentInfo = RI_ZERO_INIT;
     VkResult         result      = VK_SUCCESS;
 
-    RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_PARAM );
     if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
 
@@ -7660,8 +7631,6 @@ _rhioVK_validate_render_pipeline_info( riVK_Device * vkDevice, const riRenderPip
     riU32               i          = 0u;
     riStatus            status     = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->supportsIndirectCommands <= 1u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->depthTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->depthWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
@@ -7790,9 +7759,6 @@ _rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * in
     VkResult                            result        = VK_SUCCESS;
     riU32                               i             = 0u;
     riStatus                            status        = RI_ERROR_UNKNOWN;
-
-    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outPipeline != NULL, RI_ERROR_INVALID_PARAM );
 
     status = _rhioVK_validate_render_pipeline_info( vkDevice, info );
     if( RI_FAILED( status ) ) return status;
@@ -8066,9 +8032,6 @@ _rhioVK_create_texture_view( riDevice device, const riTextureViewInfo * info, ri
     riTextureViewInfo   normalized = RI_ZERO_INIT;
     riVK_Swapchain *    vkSwapchain = NULL;
 
-    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outTextureView != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->texture != NULL, RI_ERROR_INVALID_PARAM );
 
     // Facade-Only Views
@@ -8177,10 +8140,6 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     riU32                       imageIndex    = 0u;
     riU32                       i             = 0u;
     riStatus                    status        = RI_ERROR_UNKNOWN;
-
-    RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outRenderPass != NULL, RI_ERROR_INVALID_PARAM );
 
     RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
@@ -8330,8 +8289,7 @@ _rhioVK_render_pass_end( riRenderPass renderPass )
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
 
     vkList = vkPass->commandList;
 
@@ -8395,8 +8353,7 @@ _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vkPipeline != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
 
     // Pipeline Bind
@@ -8448,8 +8405,7 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vkBuffer != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( slot == 0u, RI_ERROR_BACKEND_UNAVAIL );
@@ -8515,8 +8471,7 @@ _rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
@@ -8554,8 +8509,7 @@ _rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
 
     RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
