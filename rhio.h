@@ -115,7 +115,7 @@
 
 // Version
 #define RHIO_VERSION_MAJOR 0
-#define RHIO_VERSION_MINOR 2
+#define RHIO_VERSION_MINOR 3
 #define RHIO_VERSION_PATCH 0
 #define RHIO_VERSION       ( ( RHIO_VERSION_MAJOR << 16 ) | ( RHIO_VERSION_MINOR << 8 ) | RHIO_VERSION_PATCH )
 #define RHIO_VERSION_STRING                                                                                            \
