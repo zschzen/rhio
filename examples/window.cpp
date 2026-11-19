@@ -29,7 +29,9 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 //----------------------------------------------------------------------------------
 // Module Internal State
@@ -37,10 +39,11 @@
 
 struct WindowState
 {
-    GLFWwindow *         handle         = nullptr;
-    WindowResizeCallback resizeCallback = nullptr;
-    WindowKeyCallback    keyCallback    = nullptr;
-    std::string          title;
+    GLFWwindow *               handle         = nullptr;
+    WindowResizeCallback       resizeCallback = nullptr;
+    WindowKeyCallback          keyCallback    = nullptr;
+    std::string                title;
+    std::vector< const char * > instanceExtensions;
 };
 
 WindowState windowState;
@@ -211,9 +214,42 @@ GetInstanceExtensions( riInstanceInfo * outInfo )
             return false;
         }
 
+    // NOTE: GLFW owns its array; copy into state so platform-specific
+    //       surface extensions can be appended
+    windowState.instanceExtensions.assign( extensions, extensions + count );
+
+    // NOTE: rhio surfaces the X11 handle through VK_KHR_xlib_surface,
+    //       while GLFW may prefer VK_KHR_xcb_surface; append ours when an
+    //       X11 display is available (skipped on Wayland-only sessions)
+#    if !defined( _WIN32 ) && !defined( __APPLE__ )
+    {
+        const char * xlibExtension = "VK_KHR_xlib_surface";
+        bool         present       = false;
+
+        for( const char * extension : windowState.instanceExtensions )
+            {
+                if( std::strcmp( extension, xlibExtension ) == 0 )
+                    {
+                        present = true;
+                        break;
+                    }
+            }
+
+        if( !present && ( glfwGetX11Display() != nullptr ) )
+            {
+                windowState.instanceExtensions.push_back( xlibExtension );
+            }
+    }
+#    endif
+
+    if( windowState.instanceExtensions.empty() )
+        {
+            return false;
+        }
+
     // NOTE: GLFW owns the array; it stays valid until glfwTerminate()
-    outInfo->extensions     = extensions;
-    outInfo->extensionCount = (riU32)count;
+    outInfo->extensions     = windowState.instanceExtensions.data();
+    outInfo->extensionCount = (riU32)windowState.instanceExtensions.size();
     return true;
 #else
     UNUSED( outInfo );
