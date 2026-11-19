@@ -5326,11 +5326,12 @@ struct riVK_CommandList
     riCommandListBase      base;             // Frontend handle dispatch
     riVK_CommandList *     next;             // Next queue-owned command list
     riVK_CommandQueue *    queue;            // Owning queue handle
-    VkCommandBuffer        commandBuffer;    // Primary command buffer from the queue pool
-    riVK_CommandListState  state;            // Recording/submission lifecycle
+    VkCommandBuffer        commandBuffers[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // One command buffer per frame slot
+    riVK_CommandListState  slotStates[RHIO_VK_MAX_FRAMES_IN_FLIGHT];     // Lifecycle per slot
+    struct riVK_Swapchain * slotTargets[RHIO_VK_MAX_FRAMES_IN_FLIGHT];   // Swapchain pending per slot
     riVK_RenderPass *      activeRenderPass; // Currently open pass, if any
-    struct riVK_Swapchain * target;          // Swapchain targeted by recorded passes
-    riU32                  pendingSlot;      // Frame slot used by the last submit
+    struct riVK_Swapchain * target;          // Swapchain of the current recording
+    riU32                  currentSlot;      // Frame slot of the current recording
 
 };
 
@@ -6231,13 +6232,23 @@ _rhioVK_create_command_list( riCommandQueue queue, riCommandList * outCommandLis
     allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = 1u;
 
-    result = vkAllocateCommandBuffers( vkQueue->device->device, &allocInfo, &vkList->commandBuffer );
-    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+    // One command buffer per frame slot keeps an in-flight frame independent
+    // from the recording of the next one
+    for( riU32 slot = 0u; slot < RHIO_VK_MAX_FRAMES_IN_FLIGHT; ++slot )
         {
-            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateCommandBuffers failed (%d)", (int)result );
-            RI_FREE( vkList );
-            return RI_ERROR_BACKEND_INIT;
+            result = vkAllocateCommandBuffers( vkQueue->device->device, &allocInfo, &vkList->commandBuffers[slot] );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateCommandBuffers failed (%d)", (int)result );
+                    RI_FREE( vkList );
+                    return RI_ERROR_BACKEND_INIT;
+                }
+
+            vkList->slotStates[slot]   = RI_VK_COMMAND_LIST_STATE_INITIAL;
+            vkList->slotTargets[slot]  = NULL;
         }
+
+    vkList->currentSlot = 0u;
 
     // Command List Dispatch Initialization
     //----------------------------------------------------------
@@ -6282,10 +6293,17 @@ _rhioVK_destroy_command_list( riCommandList commandList )
     // Command Buffer Release
     //----------------------------------------------------------
     vkQueue = vkList->queue;
-    if( vkQueue != NULL && vkList->commandBuffer != VK_NULL_HANDLE && vkQueue->commandPool != VK_NULL_HANDLE )
+    if( vkQueue != NULL && vkQueue->commandPool != VK_NULL_HANDLE )
         {
-            vkFreeCommandBuffers( vkQueue->device->device, vkQueue->commandPool, 1u, &vkList->commandBuffer );
-            vkList->commandBuffer = VK_NULL_HANDLE;
+            for( riU32 slot = 0u; slot < RHIO_VK_MAX_FRAMES_IN_FLIGHT; ++slot )
+                {
+                    if( vkList->commandBuffers[slot] != VK_NULL_HANDLE )
+                        {
+                            vkFreeCommandBuffers( vkQueue->device->device, vkQueue->commandPool, 1u,
+                                                  &vkList->commandBuffers[slot] );
+                            vkList->commandBuffers[slot] = VK_NULL_HANDLE;
+                        }
+                }
         }
 
     // Queue Ownership Unlink
@@ -6317,10 +6335,20 @@ _rhioVK_command_list_begin( riCommandList commandList )
     VkResult                 result    = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL ) )
+
+    // Slot Selection
+    //----------------------------------------------------------
+    riVK_Swapchain * armed = vkList->queue->frameTarget;
+    if( armed != NULL && armed->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED )
+        {
+            vkList->currentSlot = armed->acquiredSlot;
+        }
+
+
+    if( !( vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_INITIAL ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_begin rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_INITIAL)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_begin rejected an invalid state (vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_INITIAL)" );
         return RI_ERROR_INVALID_STATE;
     }
 
@@ -6329,14 +6357,14 @@ _rhioVK_command_list_begin( riCommandList commandList )
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    result = vkBeginCommandBuffer( vkList->commandBuffer, &beginInfo );
+    result = vkBeginCommandBuffer( vkList->commandBuffers[vkList->currentSlot], &beginInfo );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkBeginCommandBuffer failed (%d)", (int)result );
             return RI_ERROR_INVALID_STATE;
         }
 
-    vkList->state = RI_VK_COMMAND_LIST_STATE_RECORDING;
+    vkList->slotStates[vkList->currentSlot] = RI_VK_COMMAND_LIST_STATE_RECORDING;
 
     return RI_SUCCESS;
 }
@@ -6349,10 +6377,19 @@ _rhioVK_command_list_end( riCommandList commandList )
     VkResult           result = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
-    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+
+    // Slot Selection
+    //----------------------------------------------------------
+    riVK_Swapchain * armed = vkList->queue->frameTarget;
+    if( armed != NULL && armed->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED )
+        {
+            vkList->currentSlot = armed->acquiredSlot;
+        }
+
+    if( !( vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_end rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_end rejected an invalid state (vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
     if( !( vkList->activeRenderPass == NULL ) )
@@ -6362,14 +6399,14 @@ _rhioVK_command_list_end( riCommandList commandList )
         return RI_ERROR_INVALID_STATE;
     }
 
-    result = vkEndCommandBuffer( vkList->commandBuffer );
+    result = vkEndCommandBuffer( vkList->commandBuffers[vkList->currentSlot] );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkEndCommandBuffer failed (%d)", (int)result );
             return RI_ERROR_INVALID_STATE;
         }
 
-    vkList->state = RI_VK_COMMAND_LIST_STATE_EXECUTABLE;
+    vkList->slotStates[vkList->currentSlot] = RI_VK_COMMAND_LIST_STATE_EXECUTABLE;
 
     return RI_SUCCESS;
 }
@@ -6382,22 +6419,34 @@ _rhioVK_command_list_reset( riCommandList commandList )
     VkResult           result = VK_SUCCESS;
 
     RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Slot Selection
+    //----------------------------------------------------------
+    // The slot follows the armed frame when one exists so the reap of that
+    // slot has already retired its command buffer; headless recording keeps
+    // the last used slot sticky
+    riVK_Swapchain * armed = vkList->queue->frameTarget;
+    if( armed != NULL && armed->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED )
+        {
+            vkList->currentSlot = armed->acquiredSlot;
+        }
+
     if( !( vkList->activeRenderPass == NULL ) )
 
     {
         TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->activeRenderPass == NULL)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkList->slotStates[vkList->currentSlot] != RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->state != RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->slotStates[vkList->currentSlot] != RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING ) )
+    if( !( vkList->slotStates[vkList->currentSlot] != RI_VK_COMMAND_LIST_STATE_PENDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->state != RI_VK_COMMAND_LIST_STATE_PENDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: command_list_reset rejected an invalid state (vkList->slotStates[vkList->currentSlot] != RI_VK_COMMAND_LIST_STATE_PENDING)" );
         return RI_ERROR_INVALID_STATE;
     }
 
@@ -6406,14 +6455,14 @@ _rhioVK_command_list_reset( riCommandList commandList )
     // Like GL, reset after submission is accepted. The frame-in-flight fence
     // introduced with the swapchain milestone guarantees the backing command
     // buffer is no longer executing by the time a new frame records
-    result = vkResetCommandBuffer( vkList->commandBuffer, 0 );
+    result = vkResetCommandBuffer( vkList->commandBuffers[vkList->currentSlot], 0 );
     if( RI_UNLIKELY( result != VK_SUCCESS ) )
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkResetCommandBuffer failed (%d)", (int)result );
             return RI_ERROR_INVALID_STATE;
         }
 
-    vkList->state  = RI_VK_COMMAND_LIST_STATE_INITIAL;
+    vkList->slotStates[vkList->currentSlot]  = RI_VK_COMMAND_LIST_STATE_INITIAL;
     vkList->target = NULL;
 
     return RI_SUCCESS;
@@ -6460,10 +6509,10 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
         {
             vkList = (riVK_CommandList *)info->commandLists[i];
             RI_GUARD( vkList->queue == vkQueue, RI_ERROR_INVALID_PARAM );
-            if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE ) )
+            if( !( vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_EXECUTABLE ) )
 
             {
-                TRACELOG( RI_LOG_ERROR, "BACKEND VK: submit_command_lists rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_EXECUTABLE)" );
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: submit_command_lists rejected an invalid state (vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_EXECUTABLE)" );
                 return RI_ERROR_INVALID_STATE;
             }
         }
@@ -6534,7 +6583,7 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     for( i = 0u; i < info->commandListCount; ++i )
         {
             cmdBufferInfos[i].sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-            cmdBufferInfos[i].commandBuffer = ( (riVK_CommandList *)info->commandLists[i] )->commandBuffer;
+            cmdBufferInfos[i].commandBuffer = ( (riVK_CommandList *)info->commandLists[i] )->commandBuffers[vkSwapchain->acquiredSlot];
         }
 
     submitInfo.sType                   = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -6561,10 +6610,9 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     for( i = 0u; i < info->commandListCount; ++i )
         {
             vkList              = (riVK_CommandList *)info->commandLists[i];
-            vkList->state       = RI_VK_COMMAND_LIST_STATE_PENDING;
-            vkList->pendingSlot = vkSwapchain->acquiredSlot;
-            // Empty lists carry no render target; stamping here keeps the
-            // fence reaper's ownership check exact for every submission
+            vkList->slotStates[vkList->currentSlot]  = RI_VK_COMMAND_LIST_STATE_PENDING;
+            vkList->slotTargets[vkList->currentSlot] = vkSwapchain;
+            // Recording-scoped target: pass methods read it before submit
             vkList->target      = vkSwapchain;
         }
 
@@ -7581,11 +7629,10 @@ _rhioVK_reap_slots( riVK_Swapchain * vkSwapchain, bool blocking )
             for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
                 {
                     // Lists pending on another swapchain's fence stay untouched
-                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING
-                        && cursor->pendingSlot == slot
-                        && cursor->target == vkSwapchain )
+                    if( cursor->slotStates[slot] == RI_VK_COMMAND_LIST_STATE_PENDING
+                        && cursor->slotTargets[slot] == vkSwapchain )
                         {
-                            cursor->state = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                            cursor->slotStates[slot] = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
                         }
                 }
 
@@ -7636,14 +7683,62 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
                 }
         }
 
-    // Completed-Frame Reaping
+    // Selective Frame Reap
     //----------------------------------------------------------
-    // Blocking reap: waits every pending frame's fence so submitted lists are
-    // re-recordable and their descriptor pools recyclable, exactly like the
-    // synchronous GL execution model
-    _rhioVK_reap_slots( vkSwapchain, true );
-
+    // Only the slot being re-armed must be retired: its fence was submitted
+    // two frames ago and is long done, so the wait is nominal. Every other
+    // slot stays in flight, letting the GPU execute the previous frame while
+    // this one records. Fences that completed early are reaped opportunistically
     slot = vkSwapchain->frameCounter % vkSwapchain->frameSlotCount;
+
+    {
+        riVK_CommandList * cursor = NULL;
+        riU32              other  = 0u;
+
+    if( vkSwapchain->fenceBusy[slot] )
+        {
+            if( RI_UNLIKELY( vkWaitForFences( vkSwapchain->device->device, 1u,
+                                              &vkSwapchain->fences[slot], VK_TRUE,
+                                              UINT64_MAX ) != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkWaitForFences failed during slot reap" );
+                    return RI_ERROR_INVALID_STATE;
+                }
+
+            for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
+                {
+                    if( cursor->slotStates[slot] == RI_VK_COMMAND_LIST_STATE_PENDING
+                        && cursor->slotTargets[slot] == vkSwapchain )
+                        {
+                            cursor->slotStates[slot] = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                        }
+                }
+
+            vkResetFences( vkSwapchain->device->device, 1u, &vkSwapchain->fences[slot] );
+            vkSwapchain->fenceBusy[slot] = false;
+        }
+
+        for( other = 0u; other < vkSwapchain->frameSlotCount; ++other )
+            {
+                if( other == slot || !vkSwapchain->fenceBusy[other] ) continue;
+                if( vkGetFenceStatus( vkSwapchain->device->device, vkSwapchain->fences[other] ) != VK_SUCCESS )
+                    {
+                        continue;
+                    }
+
+                for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
+                    {
+                        if( cursor->slotStates[other] == RI_VK_COMMAND_LIST_STATE_PENDING
+                            && cursor->slotTargets[other] == vkSwapchain )
+                            {
+                                cursor->slotStates[other] = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                            }
+                    }
+
+                vkResetFences( vkSwapchain->device->device, 1u, &vkSwapchain->fences[other] );
+                vkSwapchain->fenceBusy[other] = false;
+            }
+    }
 
     // Backbuffer Acquire
     //----------------------------------------------------------
@@ -7816,10 +7911,15 @@ _rhioVK_destroy_swapchain( riSwapchain swapchain )
                             cursor->activeRenderPass = NULL;
                         }
 
-                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING )
+                    // The GPU is idle, so every pending slot completed
+                    for( riU32 slot = 0u; slot < RHIO_VK_MAX_FRAMES_IN_FLIGHT; ++slot )
                         {
-                            cursor->state       = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
-                            cursor->pendingSlot = 0u;
+                            if( cursor->slotStates[slot] == RI_VK_COMMAND_LIST_STATE_PENDING
+                                && cursor->slotTargets[slot] == vkSwapchain )
+                                {
+                                    cursor->slotStates[slot]  = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                                    cursor->slotTargets[slot] = NULL;
+                                }
                         }
 
                     cursor->target = NULL;
@@ -8389,10 +8489,10 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     riU32                       i             = 0u;
     riStatus                    status        = RI_ERROR_UNKNOWN;
 
-    if( !( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: begin_render_pass rejected an invalid state (vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: begin_render_pass rejected an invalid state (vkList->slotStates[vkList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
     if( !( vkList->activeRenderPass == NULL ) )
@@ -8475,7 +8575,7 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     dependencyInfo.imageMemoryBarrierCount = 1u;
     dependencyInfo.pImageMemoryBarriers  = &layoutBarrier;
 
-    vkCmdPipelineBarrier2( vkList->commandBuffer, &dependencyInfo );
+    vkCmdPipelineBarrier2( vkList->commandBuffers[vkList->currentSlot], &dependencyInfo );
 
     // Attachment Recording
     //----------------------------------------------------------
@@ -8519,7 +8619,7 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     renderingInfo.colorAttachmentCount = info->colorAttachmentCount;
     renderingInfo.pColorAttachments  = attachmentInfos;
 
-    vkCmdBeginRendering( vkList->commandBuffer, &renderingInfo );
+    vkCmdBeginRendering( vkList->commandBuffers[vkList->currentSlot], &renderingInfo );
 
     // Pass Dispatch Initialization
     //----------------------------------------------------------
@@ -8563,7 +8663,7 @@ _rhioVK_render_pass_end( riRenderPass renderPass )
 
     // Dynamic Rendering End
     //----------------------------------------------------------
-    vkCmdEndRendering( vkList->commandBuffer );
+    vkCmdEndRendering( vkList->commandBuffers[vkList->currentSlot] );
 
     // Layout Transition
     //----------------------------------------------------------
@@ -8593,7 +8693,7 @@ _rhioVK_render_pass_end( riRenderPass renderPass )
             dependencyInfo.imageMemoryBarrierCount = 1u;
             dependencyInfo.pImageMemoryBarriers  = &layoutBarrier;
 
-            vkCmdPipelineBarrier2( vkList->commandBuffer, &dependencyInfo );
+            vkCmdPipelineBarrier2( vkList->commandBuffers[vkList->currentSlot], &dependencyInfo );
 
             vkSwapchain->imageLayouts[imageIndex] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         }
@@ -8632,10 +8732,10 @@ _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
         TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_pipeline rejected an invalid state (vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
 
@@ -8643,7 +8743,7 @@ _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
     //----------------------------------------------------------
     vkPass->boundPipeline = vkPipeline;
 
-    vkCmdBindPipeline( vkPass->commandList->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+    vkCmdBindPipeline( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], VK_PIPELINE_BIND_POINT_GRAPHICS,
                        vkPipeline->pipeline );
 
     // Default Viewport and Scissor
@@ -8661,8 +8761,8 @@ _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
     scissor.extent.width  = vkPass->targetWidth;
     scissor.extent.height = vkPass->targetHeight;
 
-    vkCmdSetViewport( vkPass->commandList->commandBuffer, 0u, 1u, &viewport );
-    vkCmdSetScissor( vkPass->commandList->commandBuffer, 0u, 1u, &scissor );
+    vkCmdSetViewport( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], 0u, 1u, &viewport );
+    vkCmdSetScissor( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], 0u, 1u, &scissor );
 
     vkPass->scissorSet = true;
 
@@ -8697,10 +8797,10 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
         TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_shader_buffer rejected an invalid state (vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
     RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
@@ -8752,7 +8852,7 @@ _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
 
     // Descriptor Bind
     //----------------------------------------------------------
-    vkCmdBindDescriptorSets( vkPass->commandList->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+    vkCmdBindDescriptorSets( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], VK_PIPELINE_BIND_POINT_GRAPHICS,
                              vkPass->boundPipeline->layout, 0u, 1u, &set, 0u, NULL );
 
     return RI_SUCCESS;
@@ -8779,10 +8879,10 @@ _rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
         TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_set_viewport rejected an invalid state (vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
     RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
@@ -8804,8 +8904,8 @@ _rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
     scissor.extent.width  = width;
     scissor.extent.height = height;
 
-    vkCmdSetViewport( vkPass->commandList->commandBuffer, 0u, 1u, &viewport );
-    vkCmdSetScissor( vkPass->commandList->commandBuffer, 0u, 1u, &scissor );
+    vkCmdSetViewport( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], 0u, 1u, &viewport );
+    vkCmdSetScissor( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], 0u, 1u, &scissor );
 
     vkPass->scissorSet = true;
 
@@ -8832,10 +8932,10 @@ _rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
         TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (vkPass->commandList != NULL && vkPass->commandList->activeRenderPass == vkPass)" );
         return RI_ERROR_INVALID_STATE;
     }
-    if( !( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
+    if( !( vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING ) )
 
     {
-        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
+        TRACELOG( RI_LOG_ERROR, "BACKEND VK: render_pass_draw rejected an invalid state (vkPass->commandList->slotStates[vkPass->commandList->currentSlot] == RI_VK_COMMAND_LIST_STATE_RECORDING)" );
         return RI_ERROR_INVALID_STATE;
     }
     RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
@@ -8844,7 +8944,7 @@ _rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
     RI_GUARD( firstVertex < RHIO_VK_TRIANGLE_VERTEX_COUNT, RI_ERROR_INVALID_PARAM );
     RI_GUARD( vertexCount <= RHIO_VK_TRIANGLE_VERTEX_COUNT - firstVertex, RI_ERROR_INVALID_PARAM );
 
-    vkCmdDraw( vkPass->commandList->commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance );
+    vkCmdDraw( vkPass->commandList->commandBuffers[vkPass->commandList->currentSlot], vertexCount, instanceCount, firstVertex, firstInstance );
 
     return RI_SUCCESS;
 }
