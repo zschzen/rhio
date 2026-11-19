@@ -183,6 +183,10 @@ if(RHIO_BUILD_TESTS)
   add_subdirectory(tests/unit)
 endif()
 
+if(RHIO_BUILD_BENCHMARKS)
+  add_subdirectory(bench)
+endif()
+
 if(RHIO_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
