@@ -2972,9 +2972,6 @@ _rhioGL_create_texture_view( riDevice device, const riTextureViewInfo * info, ri
     riGL_TextureView * glTextureView = NULL;
     riTextureViewInfo  normalized    = RI_ZERO_INIT;
 
-    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outTextureView != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->texture != NULL, RI_ERROR_INVALID_PARAM );
 
     // View Normalization
@@ -3065,9 +3062,6 @@ _rhioGL_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * ou
     riBufferInfo  normalized = RI_ZERO_INIT;
     const riFlags validUsage = RI_BUFFER_USAGE_SHADER_READ;
 
-    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outBuffer != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->size > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( info->usage, ~validUsage ) == 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( info->usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
@@ -3115,10 +3109,6 @@ _rhioGL_create_render_pipeline( riDevice device, const riRenderPipelineInfo * in
     riStatus              status     = RI_ERROR_UNKNOWN;
     GLuint                program    = 0u;
     GLenum                primitive  = GL_TRIANGLES;
-
-    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outPipeline != NULL, RI_ERROR_INVALID_PARAM );
 
     status = _rhioGL_validate_render_pipeline_info( info );
     if( RI_FAILED( status ) ) return status;
@@ -3266,9 +3256,6 @@ _rhioGL_submit_command_list( riCommandQueue queue, riCommandList commandList )
 {
     riCommandQueueSubmitInfo submitInfo = RI_ZERO_INIT;
 
-    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( commandList != NULL, RI_ERROR_INVALID_PARAM );
-
     submitInfo.commandLists     = &commandList;
     submitInfo.commandListCount = 1u;
 
@@ -3283,19 +3270,12 @@ _rhioGL_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     riU32              i             = 0u;
     riStatus           status        = RI_ERROR_UNKNOWN;
 
-    RI_GUARD( queue != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info->commandLists != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info->commandListCount > 0u, RI_ERROR_INVALID_PARAM );
-
     // Submit Validation
     //----------------------------------------------------------
     // Validate the full batch before executing any command list. This keeps the
     // fallback and batched paths from partially submitting malformed batches
     for( i = 0u; i < info->commandListCount; ++i )
         {
-            RI_GUARD( info->commandLists[i] != NULL, RI_ERROR_INVALID_PARAM );
-
             glCommandList = (riGL_CommandList *)info->commandLists[i];
             RI_GUARD( glCommandList->queue == queue, RI_ERROR_INVALID_PARAM );
             RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_EXECUTABLE, RI_ERROR_INVALID_STATE );
@@ -3433,10 +3413,6 @@ _rhioGL_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
     bool                               clearScissored  = false;
     riU32                              i               = 0;
     riStatus                           status          = RI_ERROR_UNKNOWN;
-
-    RI_GUARD( glCommandList != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outRenderPass != NULL, RI_ERROR_INVALID_PARAM );
 
     RI_GUARD( glCommandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( glCommandList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
@@ -3613,8 +3589,6 @@ _rhioGL_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
 {
     riGL_Swapchain * glSwapchain = (riGL_Swapchain *)swapchain;
 
-    RI_GUARD( glSwapchain != NULL, RI_ERROR_INVALID_PARAM );
-    RI_GUARD( outTexture != NULL, RI_ERROR_INVALID_PARAM );
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_IDLE, RI_ERROR_INVALID_STATE );
 
@@ -3631,7 +3605,6 @@ _rhioGL_present( riSwapchain swapchain )
     riGL_Swapchain * glSwapchain = (riGL_Swapchain *)swapchain;
     riStatus         status      = RI_SUCCESS;
 
-    RI_GUARD( glSwapchain != NULL, RI_ERROR_INVALID_PARAM );
     if( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( glSwapchain->state == RI_GL_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
 
@@ -3768,8 +3741,7 @@ _rhioGL_render_pass_end( riRenderPass renderPass )
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
 
     glRenderPass->commandList->activeRenderPass = NULL;
     glRenderPass->ended                         = true;
@@ -3787,8 +3759,7 @@ _rhioGL_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipe
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( pipeline != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
 
     return _rhioGL_append_bind_pipeline_command( glRenderPass->commandList, pipeline );
@@ -3808,8 +3779,7 @@ _rhioGL_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBu
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( glBuffer != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
     RI_GUARD( RI_FLAG_CHECK( glBuffer->info.usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
@@ -3833,8 +3803,7 @@ _rhioGL_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
@@ -3851,8 +3820,7 @@ _rhioGL_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 inst
 
     RI_GUARD( glRenderPass != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( !glRenderPass->ended, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList != NULL, RI_ERROR_INVALID_STATE );
-    RI_GUARD( glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( glRenderPass->commandList != NULL && glRenderPass->commandList->activeRenderPass == renderPass, RI_ERROR_INVALID_STATE );
     RI_GUARD( glRenderPass->commandList->state == RI_GL_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
     RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
@@ -4638,7 +4606,6 @@ _rhioGL_validate_render_pipeline_info( const riRenderPipelineInfo * info )
     riStatus status  = RI_SUCCESS;
     riU32    i       = 0u;
 
-    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->supportsIndirectCommands <= 1u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->depthTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
     RI_GUARD( info->depthWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
