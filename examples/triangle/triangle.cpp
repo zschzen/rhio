@@ -47,10 +47,10 @@ const ExampleInfo exampleInfo = {
 // Module Internal Functions Declaration
 //----------------------------------------------------------------------------------
 
-static bool     CreateSwapchain( int width, int height );
-static void     DestroySwapchain();
-static bool     CreateTriangleResources();
-static void     DestroyTriangleResources();
+static bool CreateSwapchain( int width, int height );
+static void DestroySwapchain();
+static bool CreateTriangleResources();
+static void DestroyTriangleResources();
 #if !defined( RHIO_EXAMPLE_BACKEND_VULKAN )
 static riStatus PresentSwapchain( riSwapchain swapchain, void * userData );
 #endif
@@ -299,16 +299,16 @@ CreateSwapchain( int width, int height )
             return false;
         }
 
-    framebufferWidth  = (int)swapchainInfo.width;
-    framebufferHeight = (int)swapchainInfo.height;
+    framebufferWidth     = (int)swapchainInfo.width;
+    framebufferHeight    = (int)swapchainInfo.height;
 
-    swapchainInfo.format            = RHIO_TEXTURE_FORMAT_UNDEFINED;
+    swapchainInfo.format = RHIO_TEXTURE_FORMAT_UNDEFINED;
 #else
-    swapchainInfo.handleType        = RHIO_SWAPCHAIN_HANDLE_TYPE_NONE;
-    swapchainInfo.width             = (riU32)width;
-    swapchainInfo.height            = (riU32)height;
-    swapchainInfo.format            = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
-    swapchainInfo.presentCallback   = PresentSwapchain;
+    swapchainInfo.handleType      = RHIO_SWAPCHAIN_HANDLE_TYPE_NONE;
+    swapchainInfo.width           = (riU32)width;
+    swapchainInfo.height          = (riU32)height;
+    swapchainInfo.format          = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+    swapchainInfo.presentCallback = PresentSwapchain;
 #endif
     swapchainInfo.maxFramesInFlight = 2u;
 

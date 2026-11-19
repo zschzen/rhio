@@ -39,10 +39,10 @@
 
 struct WindowState
 {
-    GLFWwindow *               handle         = nullptr;
-    WindowResizeCallback       resizeCallback = nullptr;
-    WindowKeyCallback          keyCallback    = nullptr;
-    std::string                title;
+    GLFWwindow *                handle         = nullptr;
+    WindowResizeCallback        resizeCallback = nullptr;
+    WindowKeyCallback           keyCallback    = nullptr;
+    std::string                 title;
     std::vector< const char * > instanceExtensions;
 };
 
