@@ -17,8 +17,21 @@
 #endif
 #include <GLFW/glfw3.h>
 
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+#    if defined( _WIN32 )
+#        define GLFW_EXPOSE_NATIVE_WIN32
+#    elif defined( __APPLE__ )
+// NOTE: Metal surface requires Objective-C (CAMetalLayer); deferred
+#    else
+#        define GLFW_EXPOSE_NATIVE_X11
+#    endif
+#    include <GLFW/glfw3native.h>
+#endif
+
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 //----------------------------------------------------------------------------------
 // Module Internal State
@@ -26,10 +39,11 @@
 
 struct WindowState
 {
-    GLFWwindow *         handle         = nullptr;
-    WindowResizeCallback resizeCallback = nullptr;
-    WindowKeyCallback    keyCallback    = nullptr;
-    std::string          title;
+    GLFWwindow *                handle         = nullptr;
+    WindowResizeCallback        resizeCallback = nullptr;
+    WindowKeyCallback           keyCallback    = nullptr;
+    std::string                 title;
+    std::vector< const char * > instanceExtensions;
 };
 
 WindowState windowState;
@@ -133,16 +147,18 @@ EndWindowFrame()
     // NOTE: Presentation is driven by rhioSwapchainPresent().
 }
 
-#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
 void
 PresentWindow()
 {
+#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
     if( windowState.handle != nullptr )
         {
             glfwSwapBuffers( windowState.handle );
         }
-}
+#else
+    // NOTE: Vulkan presentation is owned by the rhio swapchain
 #endif
+}
 
 void
 SetWindowResizeCallback( WindowResizeCallback callback )
@@ -179,6 +195,105 @@ GetWindowGlProcAddress( const char * name )
 #else
     UNUSED( name );
     return nullptr;
+#endif
+}
+
+bool
+GetInstanceExtensions( riInstanceInfo * outInfo )
+{
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    if( outInfo == nullptr )
+        {
+            return false;
+        }
+
+    uint32_t      count      = 0;
+    const char ** extensions = glfwGetRequiredInstanceExtensions( &count );
+    if( ( extensions == nullptr ) || ( count == 0 ) )
+        {
+            return false;
+        }
+
+    // NOTE: GLFW owns its array; copy into state so platform-specific
+    //       surface extensions can be appended
+    windowState.instanceExtensions.assign( extensions, extensions + count );
+
+    // NOTE: rhio surfaces the X11 handle through VK_KHR_xlib_surface,
+    //       while GLFW may prefer VK_KHR_xcb_surface; append ours when an
+    //       X11 display is available (skipped on Wayland-only sessions)
+#    if !defined( _WIN32 ) && !defined( __APPLE__ )
+    {
+        const char * xlibExtension = "VK_KHR_xlib_surface";
+        bool         present       = false;
+
+        for( const char * extension : windowState.instanceExtensions )
+            {
+                if( std::strcmp( extension, xlibExtension ) == 0 )
+                    {
+                        present = true;
+                        break;
+                    }
+            }
+
+        if( !present && ( glfwGetX11Display() != nullptr ) )
+            {
+                windowState.instanceExtensions.push_back( xlibExtension );
+            }
+    }
+#    endif
+
+    if( windowState.instanceExtensions.empty() )
+        {
+            return false;
+        }
+
+    // NOTE: GLFW owns the array; it stays valid until glfwTerminate()
+    outInfo->extensions     = windowState.instanceExtensions.data();
+    outInfo->extensionCount = (riU32)windowState.instanceExtensions.size();
+    return true;
+#else
+    UNUSED( outInfo );
+    return false;
+#endif
+}
+
+bool
+GetSwapchainHandle( riSwapchainInfo * outInfo )
+{
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    if( ( outInfo == nullptr ) || ( windowState.handle == nullptr ) )
+        {
+            return false;
+        }
+
+    int width  = 0;
+    int height = 0;
+    glfwGetFramebufferSize( windowState.handle, &width, &height );
+    if( ( width <= 0 ) || ( height <= 0 ) )
+        {
+            return false;
+        }
+
+    outInfo->width  = (riU32)width;
+    outInfo->height = (riU32)height;
+
+#    if defined( _WIN32 )
+    outInfo->handleType           = RHIO_SWAPCHAIN_HANDLE_TYPE_HWND;
+    outInfo->handle.hwnd.instance = GetModuleHandle( nullptr );
+    outInfo->handle.hwnd.window   = glfwGetWin32Window( windowState.handle );
+    return ( outInfo->handle.hwnd.instance != nullptr ) && ( outInfo->handle.hwnd.window != nullptr );
+#    elif defined( __APPLE__ )
+    // NOTE: Metal surface creation requires Objective-C; not supported yet
+    return false;
+#    else
+    outInfo->handleType         = RHIO_SWAPCHAIN_HANDLE_TYPE_X11;
+    outInfo->handle.x11.display = glfwGetX11Display();
+    outInfo->handle.x11.window  = (riUPtr)glfwGetX11Window( windowState.handle );
+    return ( outInfo->handle.x11.display != nullptr ) && ( outInfo->handle.x11.window != 0 );
+#    endif
+#else
+    UNUSED( outInfo );
+    return false;
 #endif
 }
 

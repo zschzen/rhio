@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.26..4.3 FATAL_ERROR)
 project(
   rhio
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "Single-file header-only C99 RHI"
   LANGUAGES C
   HOMEPAGE_URL "https://github.com/zschzen/rhio"
@@ -137,12 +137,16 @@ if(NOT EMSCRIPTEN AND NOT ANDROID)
   endif()
 
   if(RHIO_BACKEND_VULKAN)
-    find_package(Vulkan 1.4 REQUIRED)
+    include(cmake/deps/vulkan-headers.cmake)
     include(cmake/deps/volk.cmake)
-    list(APPEND RHIO_BACKEND_LIBRARIES Vulkan::Headers volk::volk_headers)
+    include(cmake/deps/vma.cmake)
+    list(APPEND RHIO_BACKEND_LIBRARIES Vulkan::Headers volk::volk_headers GPUOpen::VulkanMemoryAllocator)
     list(APPEND RHIO_PACKAGE_DEPENDENCIES "Vulkan 1.4")
     if(RHIO_VOLK_FROM_SYSTEM)
       list(APPEND RHIO_PACKAGE_DEPENDENCIES "volk")
+    endif()
+    if(RHIO_VMA_FROM_SYSTEM)
+      list(APPEND RHIO_PACKAGE_DEPENDENCIES "VulkanMemoryAllocator")
     endif()
   endif()
 
@@ -177,6 +181,10 @@ install(
 if(RHIO_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/unit)
+endif()
+
+if(RHIO_BUILD_BENCHMARKS)
+  add_subdirectory(bench)
 endif()
 
 if(RHIO_BUILD_EXAMPLES)

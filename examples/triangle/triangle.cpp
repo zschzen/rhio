@@ -47,11 +47,13 @@ const ExampleInfo exampleInfo = {
 // Module Internal Functions Declaration
 //----------------------------------------------------------------------------------
 
-static bool     CreateSwapchain( int width, int height );
-static void     DestroySwapchain();
-static bool     CreateTriangleResources();
-static void     DestroyTriangleResources();
+static bool CreateSwapchain( int width, int height );
+static void DestroySwapchain();
+static bool CreateTriangleResources();
+static void DestroyTriangleResources();
+#if !defined( RHIO_EXAMPLE_BACKEND_VULKAN )
 static riStatus PresentSwapchain( riSwapchain swapchain, void * userData );
+#endif
 
 //----------------------------------------------------------------------------------
 // Module Functions Definition
@@ -73,6 +75,15 @@ InitExample()
     //----------------------------------------------------------
 #if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
     deviceInfo.backend = RI_BACKEND_VULKAN;
+
+    // Instance Extensions
+    //----------------------------------------------------------
+    // GLFW surface extensions feed the Vulkan instance creation
+    if( !GetInstanceExtensions( &deviceInfo.base.instance ) )
+        {
+            ShutdownExample();
+            return false;
+        }
 #elif defined( RHIO_EXAMPLE_OPENGL_ES_VERSION )
     deviceInfo.backend = RI_BACKEND_OPENGLES;
 #else
@@ -132,6 +143,21 @@ DrawExample()
     //----------------------------------------------------------
     status = rhioSwapchainGetCurrentTexture( rhioSwapchain, &displayTexture );
     if( RI_FAILED( status ) ) return;
+
+    // Display Extent
+    //----------------------------------------------------------
+    // The backbuffer extent is authoritative; it can differ from the cached
+    // framebuffer size after a swapchain recreation
+    {
+        riTextureInfo displayInfo = {};
+        rhioGetTextureInfo( displayTexture, &displayInfo );
+
+        if( ( displayInfo.width > 0u ) && ( displayInfo.height > 0u ) )
+            {
+                framebufferWidth  = (int)displayInfo.width;
+                framebufferHeight = (int)displayInfo.height;
+            }
+    }
 
     // Display View Creation
     //----------------------------------------------------------
@@ -260,15 +286,31 @@ CreateSwapchain( int width, int height )
 
     DestroySwapchain();
 
-    framebufferWidth                = width;
-    framebufferHeight               = height;
+    framebufferWidth  = width;
+    framebufferHeight = height;
 
-    swapchainInfo.handleType        = RHIO_SWAPCHAIN_HANDLE_TYPE_NONE;
-    swapchainInfo.width             = (riU32)width;
-    swapchainInfo.height            = (riU32)height;
-    swapchainInfo.format            = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+#if defined( RHIO_EXAMPLE_BACKEND_VULKAN )
+    // Native Surface
+    //----------------------------------------------------------
+    // The Vulkan swapchain presents through the window system directly;
+    // no callback is needed
+    if( !GetSwapchainHandle( &swapchainInfo ) )
+        {
+            return false;
+        }
+
+    framebufferWidth     = (int)swapchainInfo.width;
+    framebufferHeight    = (int)swapchainInfo.height;
+
+    swapchainInfo.format = RHIO_TEXTURE_FORMAT_UNDEFINED;
+#else
+    swapchainInfo.handleType      = RHIO_SWAPCHAIN_HANDLE_TYPE_NONE;
+    swapchainInfo.width           = (riU32)width;
+    swapchainInfo.height          = (riU32)height;
+    swapchainInfo.format          = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+    swapchainInfo.presentCallback = PresentSwapchain;
+#endif
     swapchainInfo.maxFramesInFlight = 2u;
-    swapchainInfo.presentCallback   = PresentSwapchain;
 
     status                          = rhioCreateSwapchain( rhioDevice, rhioQueue, &swapchainInfo, &rhioSwapchain );
 
@@ -345,6 +387,7 @@ DestroySwapchain()
         }
 }
 
+#if !defined( RHIO_EXAMPLE_BACKEND_VULKAN )
 static riStatus
 PresentSwapchain( riSwapchain swapchain, void * userData )
 {
@@ -355,3 +398,4 @@ PresentSwapchain( riSwapchain swapchain, void * userData )
 
     return RI_SUCCESS;
 }
+#endif

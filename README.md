@@ -68,7 +68,7 @@ Desktop OpenGL builds also need GLEW available to the implementation translation
 CPMAddPackage(
   NAME rhio
   GITHUB_REPOSITORY zschzen/rhio
-  GIT_TAG v0.2.0
+  GIT_TAG v0.3.0
 )
 target_link_libraries(my_project PRIVATE rhio::rhio)
 ```

@@ -33,6 +33,9 @@ endif()
 set(USE_STATIC_ANALYZER "" CACHE STRING "Enable static analyzers")
 
 if(USE_SANITIZER OR USE_STATIC_ANALYZER)
+  # cmake-scripts sanitizer/analyzer probes compile C++ check sources, which
+  # requires the CXX language even though rhio itself is C99
+  enable_language(CXX OPTIONAL)
   CPMAddPackage("gh:StableCoder/cmake-scripts#24.04.1")
   if(USE_SANITIZER)
     include(${cmake-scripts_SOURCE_DIR}/sanitizers.cmake)

@@ -217,3 +217,21 @@ jobs:
       # --------------------------------------------------------------
       - name: Build Vulkan examples
         run: cmake --build build/examples-linux-vulkan --parallel
+
+      # --------------------------------------------------------------
+      # Headless Smoke Run
+      # --------------------------------------------------------------
+      # Renders the triangle through lavapipe (Mesa's CPU Vulkan ICD)
+      # inside a virtual X server; the frame cap turns the endless
+      # example loop into a finite smoke test
+      - name: Install headless runtime
+        run: sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers
+
+      - name: Smoke run triangle
+        env:
+          RHIO_EXAMPLE_MAX_FRAMES: "100"
+          # Optional: enable the SDK's KHRONOS validation layer when present
+          VK_LAYER_PATH: ${{ env.VULKAN_SDK }}/etc/vulkan/explicit_layer.d
+        run: |
+          set -euo pipefail
+          xvfb-run -a ./build/examples-linux-vulkan/examples/bin/triangle

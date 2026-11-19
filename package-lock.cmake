@@ -81,10 +81,35 @@ CPMDeclarePackage(glew
 # Volk
 CPMDeclarePackage(volk
   NAME volk
-  GIT_TAG vulkan-sdk-1.4.341.0
+  GIT_TAG vulkan-sdk-1.4.350.0
   GITHUB_REPOSITORY zeux/volk
   OPTIONS
     "VOLK_HEADERS_ONLY ON"
-    "VOLK_PULL_IN_VULKAN ON"
+    "VOLK_PULL_IN_VULKAN OFF"
     "VOLK_INSTALL OFF"
+)
+
+# Vulkan Memory Allocator
+CPMDeclarePackage(VulkanMemoryAllocator
+  NAME VulkanMemoryAllocator
+  GIT_TAG v3.5.0
+  GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+  OPTIONS
+    "VMA_BUILD_SAMPLES OFF"
+    "VMA_BUILD_TESTS OFF"
+)
+
+# Google Benchmark
+CPMDeclarePackage(benchmark
+  NAME benchmark
+  GIT_TAG v1.9.4
+  GITHUB_REPOSITORY google/benchmark
+  SYSTEM YES
+  EXCLUDE_FROM_ALL YES
+  OPTIONS
+    "BENCHMARK_ENABLE_TESTING OFF"
+    "BENCHMARK_ENABLE_GTEST_TESTING OFF"
+    "BENCHMARK_ENABLE_INSTALL OFF"
+    "BENCHMARK_ENABLE_WERROR OFF"
+    "BENCHMARK_ENABLE_LIBPFM OFF"
 )

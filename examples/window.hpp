@@ -6,6 +6,8 @@
 *
 ********************************************************************************************/
 
+#include "rhio.h"
+
 #pragma once
 
 //----------------------------------------------------------------------------------
@@ -39,6 +41,7 @@ void         SetWindowKeyCallback( WindowKeyCallback callback );
 GLFWwindow * GetWindowHandle();
 WindowGlProc GetWindowGlProcAddress( const char * name );
 
-#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
+bool GetInstanceExtensions( riInstanceInfo * outInfo );
+bool GetSwapchainHandle( riSwapchainInfo * outInfo );
+
 void PresentWindow();
-#endif
