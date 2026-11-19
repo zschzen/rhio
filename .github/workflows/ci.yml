@@ -195,4 +195,4 @@ jobs:
       # Header-only projects still need packaging/export checks because users
       # consume them through install trees and CMake package config files
       - name: Install package
-        run: cmake --install build --prefix "${RUNNER_TEMP}/rhio-install"
+        run: cmake --install build-sanitize --prefix "${RUNNER_TEMP}/rhio-install"
