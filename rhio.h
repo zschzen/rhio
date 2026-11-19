@@ -50,6 +50,11 @@
 *       #define RHIO_BACKEND_VULKAN       // Vulkan 1.4+
 *           Enables the desired rendering backends.
 *
+*           NOTE: The Vulkan backend loads through volk at runtime (no loader
+*           link) and uses Vulkan Memory Allocator. Its implementation is C++
+*           only, so the RHIO_IMPLEMENTATION translation unit must be compiled
+*           as C++ when this backend is enabled. OpenGL remains pure C99.
+*
 *       #define RI_MALLOC(sz)
 *       #define RI_CALLOC(n,sz)
 *       #define RI_REALLOC(pt,sz)
@@ -611,11 +616,25 @@ typedef struct
     riF32 a; // Alpha channel
 } riColor;
 
+// Backend instance creation hints
+// NOTE: Vulkan uses these for VkInstance layers/extensions; other backends ignore them.
+//       The pointer arrays are borrowed; the caller keeps them alive across the
+//       rhioCreateDevice() call.
+typedef struct riInstanceInfo
+{
+    const char* const* extensions; // e.g. glfwGetRequiredInstanceExtensions output
+    riU32              extensionCount;
+    const char* const* layers;     // e.g. "VK_LAYER_KHRONOS_validation"
+    riU32              layerCount;
+
+} riInstanceInfo;
+
 #if !defined( RHIO_INIT_INFO_TYPE )
 // Initialization information
 typedef struct
 {
-    const char * appName; // Application name
+    const char *    appName;  // Application name
+    riInstanceInfo  instance; // Backend instance creation hints
 
 } riInitInfo;
 #    define RHIO_INIT_INFO_TYPE
@@ -4928,15 +4947,1104 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 #    if defined( RHIO_BACKEND_VULKAN )
 
 //----------------------------------------------------------------------------------
+// Vulkan Backend Configuration
+//----------------------------------------------------------------------------------
+
+// Maximum number of swapchain images tracked by one swapchain
+#        ifndef RHIO_VK_MAX_SWAPCHAIN_IMAGES
+#            define RHIO_VK_MAX_SWAPCHAIN_IMAGES 8u
+#        endif
+
+// Maximum number of frames allowed in flight (acquire slot rotation)
+#        ifndef RHIO_VK_MAX_FRAMES_IN_FLIGHT
+#            define RHIO_VK_MAX_FRAMES_IN_FLIGHT 2u
+#        endif
+
+// Descriptor sets allocated per frame slot before the pool is recycled
+#        ifndef RHIO_VK_DESCRIPTOR_SETS_PER_FRAME
+#            define RHIO_VK_DESCRIPTOR_SETS_PER_FRAME 32u
+#        endif
+
+// Built-in triangle shader pulls vertices from shader buffer set 0 / binding 0
+#        ifndef RHIO_VK_TRIANGLE_VERTEX_COUNT
+#            define RHIO_VK_TRIANGLE_VERTEX_COUNT 3u
+#        endif
+
+//----------------------------------------------------------------------------------
+// Vulkan Loader and Headers
+//----------------------------------------------------------------------------------
+// NOTE: rhio loads Vulkan through volk at runtime; the loader library is never
+// linked. Platform surface defines stay behind __has_include guards so the
+// implementation compiles on hosts without those development headers.
+//
+// NOTE: Vulkan Memory Allocator ships a C API but compiles its implementation
+// only in C++. The RHIO_IMPLEMENTATION translation unit must therefore be C++
+// when RHIO_BACKEND_VULKAN is enabled; the OpenGL backend stays pure C99.
+#        if !defined( __cplusplus ) && !defined( RHIO_VK_ALLOW_C_IMPL )
+#            error "rhio Vulkan backend: the RHIO_IMPLEMENTATION translation unit must be compiled as C++ (Vulkan Memory Allocator constraint)"
+#        endif
+
+#        if defined( _WIN32 )
+#            define VK_USE_PLATFORM_WIN32_KHR
+#        elif defined( __APPLE__ )
+#            define VK_USE_PLATFORM_METAL_EXT
+#        elif defined( __linux__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
+#            if defined( __has_include )
+#                if __has_include( <X11/Xlib.h> )
+#                    define VK_USE_PLATFORM_XLIB_KHR
+#                endif
+#                if __has_include( <wayland-client.h> )
+#                    define VK_USE_PLATFORM_WAYLAND_KHR
+#                endif
+#            endif
+#        endif
+
+#        define VOLK_IMPLEMENTATION
+#        include <volk.h>
+
+#        define VMA_STATIC_VULKAN_FUNCTIONS 0
+#        define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#        define VMA_IMPLEMENTATION
+#        include <vk_mem_alloc.h>
+
+#        include <string.h>
+
+//----------------------------------------------------------------------------------
+// Types and Structures Definition                                    [>>VK_TYPES<<]
+//----------------------------------------------------------------------------------
+
+// Instance extensions required by a swapchain surface, resolved at init time
+typedef enum
+{
+    RI_VK_SURFACE_EXT_NONE    = 0,
+    RI_VK_SURFACE_EXT_WIN32   = 1u << 0,
+    RI_VK_SURFACE_EXT_XLIB    = 1u << 1,
+    RI_VK_SURFACE_EXT_WAYLAND = 1u << 2,
+    RI_VK_SURFACE_EXT_METAL   = 1u << 3,
+
+} riVK_SurfaceExtensionBits;
+
+// Internal Vulkan device state
+typedef struct riVK_Device
+{
+    riDeviceBase               base;               // Frontend handle dispatch
+    VkInstance                 instance;           // Vulkan instance (owned)
+    VkDebugUtilsMessengerEXT   debugMessenger;     // Validation messenger, VK_NULL_HANDLE when off
+    VkPhysicalDevice           physicalDevice;     // Selected physical device
+    VkDevice                   device;             // Logical device (owned)
+    riU32                      queueFamily;        // Graphics queue family index
+    VkQueue                    queue;              // Graphics queue
+    VmaAllocator               allocator;          // Vulkan Memory Allocator instance
+    VkDescriptorSetLayout      shaderBufferLayout; // Set layout: binding 0 SSBO, vertex stage
+    VkCommandPool              uploadCommandPool;  // Pool backing blocking staging uploads
+    VkCommandBuffer            uploadCommandBuffer;
+    VkFence                    uploadFence;
+    riU32                      surfaceExtensions;  // riVK_SurfaceExtensionBits enabled at init
+    riU32                      maxApiVersion;      // Clamped instance API version
+    riU32                      fillModeNonSolid;   // Wireframe rasterization supported
+    VkPhysicalDeviceProperties properties;         // Device metadata for logs and limits
+
+} riVK_Device;
+
+// Internal Vulkan buffer state
+typedef struct riVK_Buffer
+{
+    riBufferBase  base;       // Frontend handle dispatch
+    riBufferInfo  info;       // Normalized metadata; data pointer is not retained
+    VkBuffer      buffer;     // Buffer object
+    VmaAllocation allocation; // VMA allocation handle
+
+} riVK_Buffer;
+
+// Internal Vulkan render pipeline state
+typedef struct riVK_RenderPipeline
+{
+    riRenderPipelineBase base;           // Frontend handle dispatch
+    riRenderPipelineInfo info;           // Normalized metadata
+    VkPipeline           pipeline;       // Graphics pipeline over the builtin shaders
+    VkPipelineLayout     layout;         // Pipeline layout over shaderBufferLayout
+    VkShaderModule       vertexModule;   // Builtin vertex shader (owned)
+    VkShaderModule       fragmentModule; // Builtin fragment shader (owned)
+
+} riVK_RenderPipeline;
+
+// Forward declarations for cross-referencing backend structs
+struct riVK_Swapchain;
+
+typedef struct riVK_CommandList riVK_CommandList;
+typedef struct riVK_RenderPass  riVK_RenderPass;
+
+// Internal Vulkan texture state
+typedef struct riVK_Texture
+{
+    riTextureBase base;             // Frontend handle dispatch
+    riTextureInfo info;             // Normalized metadata
+    VkImage       image;            // Native image, VK_NULL_HANDLE for facades
+    bool          isSwapchainImage; // Texture wraps a swapchain image
+    struct riVK_Swapchain * swapchain; // Owning swapchain for facade textures
+
+} riVK_Texture;
+
+// Internal Vulkan texture view state
+typedef struct riVK_TextureView
+{
+    riTextureViewBase base;            // Frontend handle dispatch
+    riTextureViewInfo info;            // Normalized view metadata
+    riVK_Texture *    texture;         // Borrowed texture backing this view
+    VkImageView       view;            // Owned view, VK_NULL_HANDLE for swapchain views
+    bool              isSwapchainView; // View borrows a swapchain-owned image view
+    riU32             imageIndex;      // Swapchain image slot when isSwapchainView
+
+} riVK_TextureView;
+
+// Command list recording and submission state
+typedef enum riVK_CommandListState
+{
+    RI_VK_COMMAND_LIST_STATE_INITIAL = 0, // Command list is ready for recording
+    RI_VK_COMMAND_LIST_STATE_RECORDING,   // Command list is currently recording
+    RI_VK_COMMAND_LIST_STATE_EXECUTABLE,  // Command list finished recording
+    RI_VK_COMMAND_LIST_STATE_PENDING,     // Command list submitted, fence not waited yet
+    RI_VK_COMMAND_LIST_STATE_SUBMITTED,   // Fence waited, safe to reset
+
+} riVK_CommandListState;
+
+// Command queue implementation
+typedef struct riVK_CommandQueue
+{
+    riCommandQueueBase base;         // Frontend handle dispatch
+    riVK_Device *      device;       // Owning device state
+    VkCommandPool      commandPool;  // Pool backing all queue-owned command lists
+    riVK_CommandList * commandLists; // Queue-owned command list chain
+
+} riVK_CommandQueue;
+
+// Command list implementation
+struct riVK_CommandList
+{
+    riCommandListBase      base;             // Frontend handle dispatch
+    riVK_CommandList *     next;             // Next queue-owned command list
+    riVK_CommandQueue *    queue;            // Owning queue handle
+    VkCommandBuffer        commandBuffer;    // Primary command buffer from the queue pool
+    riVK_CommandListState  state;            // Recording/submission lifecycle
+    riVK_RenderPass *      activeRenderPass; // Currently open pass, if any
+    struct riVK_Swapchain * target;          // Swapchain targeted by recorded passes
+    riU32                  pendingSlot;      // Frame slot used by the last submit
+
+};
+
+// Swapchain acquire/present lifetime
+typedef enum riVK_SwapchainState
+{
+    RI_VK_SWAPCHAIN_STATE_IDLE = 0, // Swapchain is ready for use
+    RI_VK_SWAPCHAIN_STATE_ACQUIRED, // Backbuffer has been acquired
+    RI_VK_SWAPCHAIN_STATE_LOST,     // Swapchain needs recreation
+
+} riVK_SwapchainState;
+
+// Internal Vulkan swapchain state
+typedef struct riVK_Swapchain
+{
+    riSwapchainBase     base;             // Frontend handle dispatch
+    riSwapchainInfo     info;             // Creation info copy
+    riVK_Device *       device;           // Owning device state
+    riVK_CommandQueue * queue;            // Presenting queue (borrowed)
+    VkSurfaceKHR        surface;          // Native surface (owned)
+    VkSwapchainKHR      swapchain;        // Swapchain object (owned)
+    VkFormat            format;           // Resolved surface format
+    VkColorSpaceKHR     colorSpace;       // Resolved color space
+    VkExtent2D          extent;           // Resolved image extent
+    riU32               imageCount;       // Number of swapchain images
+    riU32               frameSlotCount;   // Frames in flight, clamped 1..RHIO_VK_MAX_FRAMES_IN_FLIGHT
+    riU32               imageIndex;       // Currently acquired image
+    riU32               acquiredSlot;     // Frame slot of the current acquire
+    riU32               frameCounter;     // Total acquired frames, drives slot rotation
+    bool                needsRecreate;    // Out-of-date swapchain, recreate on next acquire
+    riVK_SwapchainState state;            // Acquire/present lifetime state
+    riVK_Texture        textures[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Facade textures (inline)
+    VkImageView         imageViews[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
+    VkSemaphore         imageAvailable[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    VkSemaphore         renderFinished[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    VkFence             fences[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    bool                fenceBusy[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
+    VkDescriptorPool    descriptorPools[RHIO_VK_MAX_FRAMES_IN_FLIGHT]; // Per-slot SSBO sets
+
+} riVK_Swapchain;
+
+// Render pass state
+typedef struct riVK_RenderPass
+{
+    riRenderPassBase      base;          // Frontend handle dispatch
+    riVK_CommandList *    commandList;   // Owning command list while pass is open
+    bool                  ended;         // Prevents double-end on the opaque handle
+    riVK_RenderPipeline * boundPipeline; // Pipeline bound by set_pipeline, NULL before
+    riU32                 targetWidth;   // Attachment width, flip origin for viewports
+    riU32                 targetHeight;  // Attachment height, flip origin for viewports
+    bool                  scissorSet;    // Scissor already defaulted to the render area
+
+} riVK_RenderPass;
+
+//----------------------------------------------------------------------------------
+// Internal Functions Declaration
+//----------------------------------------------------------------------------------
+
+// Device lifecycle
+static riStatus _rhioVK_init( riDevice device, const riBackendInitInfo * info );
+static void     _rhioVK_shutdown( riDevice device );
+
+// Instance setup
+static riU32    _rhioVK_surface_extension_mask( const riInstanceInfo * instanceInfo );
+static bool     _rhioVK_instance_layer_available( const char * layerName );
+static VkBool32 _rhioVK_debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                        VkDebugUtilsMessageTypeFlagsEXT types,
+                                        const VkDebugUtilsMessengerCallbackDataEXT * data, void * userData );
+static void     _rhioVK_set_object_name( riVK_Device * vkDevice, VkObjectType type, riU64 handle,
+                                         const char * name );
+static riStatus _rhioVK_pick_physical( riVK_Device * vkDevice );
+static riStatus _rhioVK_create_logical( riVK_Device * vkDevice );
+
+// Device vtable
+static riStatus _rhioVK_create_command_queue( riDevice device, riCommandQueue * outQueue );
+static riStatus _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapchainInfo * info,
+                                          riSwapchain * outSwapchain );
+static riStatus _rhioVK_create_texture_view( riDevice device, const riTextureViewInfo * info,
+                                             riTextureView * outTextureView );
+static riStatus _rhioVK_create_buffer( riDevice device, const riBufferInfo * info, riBuffer * outBuffer );
+static riStatus _rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info,
+                                                riRenderPipeline * outPipeline );
+
+//----------------------------------------------------------------------------------
 // Vulkan Backend Vtable
 //----------------------------------------------------------------------------------
-#        define BIND_FUNC( name ) .name = _rhioVK_##name
+// NOTE: Only the slots validated by rhioCreateDevice() are registered until the
+// matching backend milestones land. Unregistered slots stay NULL.
 
-static const riDeviceVTable s_vk_vtable = RI_ZERO_INIT;
+static const riDeviceVTable s_vk_vtable = {
+    .init                 = _rhioVK_init,
+    .shutdown             = _rhioVK_shutdown,
+    .create_command_queue = _rhioVK_create_command_queue,
+};
 
-#        undef BIND_FUNC
+//----------------------------------------------------------------------------------
+// Vulkan Conversion Helpers
+//----------------------------------------------------------------------------------
 
-// Fill Vulkan descriptor metadata
+// Map a public texture format to its Vulkan format
+static riStatus
+_rhioVK_format_to_vk( riTextureFormat format, VkFormat * outFormat )
+{
+    RI_GUARD( outFormat != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( format )
+        {
+        case RHIO_TEXTURE_FORMAT_B8G8R8A8_UNORM: *outFormat = VK_FORMAT_B8G8R8A8_UNORM; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_B8G8R8A8_SRGB:  *outFormat = VK_FORMAT_B8G8R8A8_SRGB; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM: *outFormat = VK_FORMAT_R8G8B8A8_UNORM; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_R8G8B8A8_SRGB:  *outFormat = VK_FORMAT_R8G8B8A8_SRGB; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_R16G16B16A16_FLOAT: *outFormat = VK_FORMAT_R16G16B16A16_SFLOAT; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_R32G32B32A32_FLOAT: *outFormat = VK_FORMAT_R32G32B32A32_SFLOAT; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_D24_UNORM_S8_UINT:  *outFormat = VK_FORMAT_D24_UNORM_S8_UINT; return RI_SUCCESS;
+        case RHIO_TEXTURE_FORMAT_D32_FLOAT_S8_UINT:  *outFormat = VK_FORMAT_D32_SFLOAT_S8_UINT; return RI_SUCCESS;
+        default:                                     return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map a Vulkan format to the closest public texture format
+static riStatus
+_rhioVK_format_from_vk( VkFormat format, riTextureFormat * outFormat )
+{
+    RI_GUARD( outFormat != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( format )
+        {
+        case VK_FORMAT_B8G8R8A8_UNORM: *outFormat = RHIO_TEXTURE_FORMAT_B8G8R8A8_UNORM; return RI_SUCCESS;
+        case VK_FORMAT_B8G8R8A8_SRGB:  *outFormat = RHIO_TEXTURE_FORMAT_B8G8R8A8_SRGB; return RI_SUCCESS;
+        case VK_FORMAT_R8G8B8A8_UNORM: *outFormat = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM; return RI_SUCCESS;
+        case VK_FORMAT_R8G8B8A8_SRGB:  *outFormat = RHIO_TEXTURE_FORMAT_R8G8B8A8_SRGB; return RI_SUCCESS;
+        case VK_FORMAT_R16G16B16A16_SFLOAT: *outFormat = RHIO_TEXTURE_FORMAT_R16G16B16A16_FLOAT; return RI_SUCCESS;
+        case VK_FORMAT_R32G32B32A32_SFLOAT: *outFormat = RHIO_TEXTURE_FORMAT_R32G32B32A32_FLOAT; return RI_SUCCESS;
+        case VK_FORMAT_D24_UNORM_S8_UINT:   *outFormat = RHIO_TEXTURE_FORMAT_D24_UNORM_S8_UINT; return RI_SUCCESS;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:  *outFormat = RHIO_TEXTURE_FORMAT_D32_FLOAT_S8_UINT; return RI_SUCCESS;
+        default:                            return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public topology to Vulkan topology
+static riStatus
+_rhioVK_topology_to_vk( riPipelineTopology topology, VkPrimitiveTopology * outTopology )
+{
+    RI_GUARD( outTopology != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( topology )
+        {
+        case RI_PIPELINE_TOPOLOGY_TRIANGLE_LIST: *outTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; return RI_SUCCESS;
+        case RI_PIPELINE_TOPOLOGY_LINE_LIST:     *outTopology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; return RI_SUCCESS;
+        case RI_PIPELINE_TOPOLOGY_POINT_LIST:    *outTopology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST; return RI_SUCCESS;
+        default:                                 return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public fill mode to Vulkan polygon mode
+static riStatus
+_rhioVK_fill_mode_to_vk( riPipelineFillMode mode, VkPolygonMode * outMode )
+{
+    RI_GUARD( outMode != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( mode )
+        {
+        case RI_PIPELINE_FILL_MODE_SOLID:     *outMode = VK_POLYGON_MODE_FILL; return RI_SUCCESS;
+        case RI_PIPELINE_FILL_MODE_WIREFRAME: *outMode = VK_POLYGON_MODE_LINE; return RI_SUCCESS;
+        default:                              return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public cull mode to Vulkan cull mode
+static riStatus
+_rhioVK_cull_mode_to_vk( riPipelineCullMode mode, VkCullModeFlags * outMode )
+{
+    RI_GUARD( outMode != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( mode )
+        {
+        case RI_PIPELINE_CULL_MODE_NONE:  *outMode = VK_CULL_MODE_NONE; return RI_SUCCESS;
+        case RI_PIPELINE_CULL_MODE_FRONT: *outMode = VK_CULL_MODE_FRONT_BIT; return RI_SUCCESS;
+        case RI_PIPELINE_CULL_MODE_BACK:  *outMode = VK_CULL_MODE_BACK_BIT; return RI_SUCCESS;
+        default:                          return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public front face to Vulkan front face
+// NOTE: The Vulkan viewport is flipped (negative height) to match GL orientation,
+//       which keeps window-space winding consistent with the GL backend
+static riStatus
+_rhioVK_front_face_to_vk( riPipelineFrontFace face, VkFrontFace * outFace )
+{
+    RI_GUARD( outFace != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( face )
+        {
+        case RI_PIPELINE_FRONT_FACE_COUNTER_CLOCKWISE: *outFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; return RI_SUCCESS;
+        case RI_PIPELINE_FRONT_FACE_CLOCKWISE:         *outFace = VK_FRONT_FACE_CLOCKWISE; return RI_SUCCESS;
+        default:                                       return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public compare operation to Vulkan compare operation
+static riStatus
+_rhioVK_compare_operation_to_vk( riCompareOperation operation, VkCompareOp * outOperation )
+{
+    RI_GUARD( outOperation != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( operation )
+        {
+        case RI_COMPARE_OPERATION_NEVER:         *outOperation = VK_COMPARE_OP_NEVER; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_LESS:          *outOperation = VK_COMPARE_OP_LESS; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_EQUAL:         *outOperation = VK_COMPARE_OP_EQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_LESS_EQUAL:    *outOperation = VK_COMPARE_OP_LESS_OR_EQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_GREATER:       *outOperation = VK_COMPARE_OP_GREATER; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_NOT_EQUAL:     *outOperation = VK_COMPARE_OP_NOT_EQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_GREATER_EQUAL: *outOperation = VK_COMPARE_OP_GREATER_OR_EQUAL; return RI_SUCCESS;
+        case RI_COMPARE_OPERATION_ALWAYS:        *outOperation = VK_COMPARE_OP_ALWAYS; return RI_SUCCESS;
+        default:                                 return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public blend factor to Vulkan blend factor
+static riStatus
+_rhioVK_blend_factor_to_vk( riBlendFactor factor, VkBlendFactor * outFactor )
+{
+    RI_GUARD( outFactor != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( factor )
+        {
+        case RI_BLEND_FACTOR_ZERO:                *outFactor = VK_BLEND_FACTOR_ZERO; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE:                 *outFactor = VK_BLEND_FACTOR_ONE; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_COLOR:           *outFactor = VK_BLEND_FACTOR_SRC_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_SRC_COLOR: *outFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_DST_COLOR:           *outFactor = VK_BLEND_FACTOR_DST_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_DST_COLOR: *outFactor = VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_ALPHA:           *outFactor = VK_BLEND_FACTOR_SRC_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA: *outFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_DST_ALPHA:           *outFactor = VK_BLEND_FACTOR_DST_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_ONE_MINUS_DST_ALPHA: *outFactor = VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_SRC_ALPHA_SATURATE:  *outFactor = VK_BLEND_FACTOR_SRC_ALPHA_SATURATE; return RI_SUCCESS;
+        case RI_BLEND_FACTOR_BLEND_COLOR:         *outFactor = VK_BLEND_FACTOR_CONSTANT_COLOR; return RI_SUCCESS;
+        default:                                  return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public blend operation to Vulkan blend operation
+static riStatus
+_rhioVK_blend_operation_to_vk( riBlendOperation operation, VkBlendOp * outOperation )
+{
+    RI_GUARD( outOperation != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( operation )
+        {
+        case RI_BLEND_OPERATION_ADD:              *outOperation = VK_BLEND_OP_ADD; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_SUBTRACT:         *outOperation = VK_BLEND_OP_SUBTRACT; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_REVERSE_SUBTRACT: *outOperation = VK_BLEND_OP_REVERSE_SUBTRACT; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_MIN:              *outOperation = VK_BLEND_OP_MIN; return RI_SUCCESS;
+        case RI_BLEND_OPERATION_MAX:              *outOperation = VK_BLEND_OP_MAX; return RI_SUCCESS;
+        default:                                  return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public attachment load action to Vulkan load operation
+static riStatus
+_rhioVK_load_action_to_vk( riAttachmentLoadAction action, VkAttachmentLoadOp * outAction )
+{
+    RI_GUARD( outAction != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( action )
+        {
+        case RI_ATTACHMENT_LOAD_ACTION_LOAD:     *outAction = VK_ATTACHMENT_LOAD_OP_LOAD; return RI_SUCCESS;
+        case RI_ATTACHMENT_LOAD_ACTION_CLEAR:    *outAction = VK_ATTACHMENT_LOAD_OP_CLEAR; return RI_SUCCESS;
+        case RI_ATTACHMENT_LOAD_ACTION_DONT_CARE: *outAction = VK_ATTACHMENT_LOAD_OP_DONT_CARE; return RI_SUCCESS;
+        default:                                  return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+// Map public attachment store action to Vulkan store operation
+static riStatus
+_rhioVK_store_action_to_vk( riAttachmentStoreAction action, VkAttachmentStoreOp * outAction )
+{
+    RI_GUARD( outAction != NULL, RI_ERROR_INVALID_PARAM );
+
+    switch( action )
+        {
+        case RI_ATTACHMENT_STORE_ACTION_STORE:    *outAction = VK_ATTACHMENT_STORE_OP_STORE; return RI_SUCCESS;
+        case RI_ATTACHMENT_STORE_ACTION_DONT_CARE: *outAction = VK_ATTACHMENT_STORE_OP_DONT_CARE; return RI_SUCCESS;
+        default:                                   return RI_ERROR_INVALID_PARAM;
+        }
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Instance Helpers
+//----------------------------------------------------------------------------------
+
+// Resolve the surface extension bits requested by the application
+static riU32
+_rhioVK_surface_extension_mask( const riInstanceInfo * instanceInfo )
+{
+    riU32 mask    = 0;
+    riU32 i       = 0u;
+
+    if( instanceInfo == NULL || instanceInfo->extensions == NULL ) return mask;
+
+    for( i = 0u; i < instanceInfo->extensionCount; ++i )
+        {
+            const char * extension = instanceInfo->extensions[i];
+            if( extension == NULL ) continue;
+
+            if( strcmp( extension, "VK_KHR_win32_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_WIN32;
+            else if( strcmp( extension, "VK_KHR_xlib_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_XLIB;
+            else if( strcmp( extension, "VK_KHR_wayland_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_WAYLAND;
+            else if( strcmp( extension, "VK_EXT_metal_surface" ) == 0 ) mask |= RI_VK_SURFACE_EXT_METAL;
+        }
+
+    return mask;
+}
+
+// Check whether a Vulkan instance layer is installed on this system
+static bool
+_rhioVK_instance_layer_available( const char * layerName )
+{
+    VkLayerProperties * properties = NULL;
+    riU32               count      = 0u;
+    VkResult            result     = VK_SUCCESS;
+    bool                found      = false;
+    riU32               i          = 0u;
+
+    result = vkEnumerateInstanceLayerProperties( &count, NULL );
+    if( result != VK_SUCCESS || count == 0u ) return false;
+
+    properties = (VkLayerProperties *)RI_MALLOC( (riSize)count * sizeof( VkLayerProperties ) );
+    if( RI_UNLIKELY( properties == NULL ) ) return false;
+
+    result = vkEnumerateInstanceLayerProperties( &count, properties );
+    if( result == VK_SUCCESS )
+        {
+            for( i = 0u; i < count; ++i )
+                {
+                    if( strcmp( properties[i].layerName, layerName ) == 0 )
+                        {
+                            found = true;
+                            break;
+                        }
+                }
+        }
+
+    RI_FREE( properties );
+
+    return found;
+}
+
+// Forward validation messages into the rhio logging system
+static VkBool32
+_rhioVK_debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT types,
+                        const VkDebugUtilsMessengerCallbackDataEXT * data, void * userData )
+{
+    int level = RI_LOG_TRACE;
+
+    UNUSED( types );
+    UNUSED( userData );
+
+    if( severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT ) level = RI_LOG_ERROR;
+    else if( severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT ) level = RI_LOG_WARNING;
+    else if( severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT ) level = RI_LOG_INFO;
+
+    if( data != NULL && data->pMessage != NULL )
+        {
+            TRACELOG( level, "BACKEND VK: %s", data->pMessage );
+        }
+
+    return VK_FALSE;
+}
+
+// Apply a debug object name when validation is active
+static void
+_rhioVK_set_object_name( riVK_Device * vkDevice, VkObjectType type, riU64 handle, const char * name )
+{
+    VkDebugUtilsObjectNameInfoEXT nameInfo = RI_ZERO_INIT;
+
+    if( RI_UNLIKELY( vkDevice == NULL ) ) return;
+    if( vkDevice->debugMessenger == VK_NULL_HANDLE ) return;
+    if( RI_UNLIKELY( handle == 0u ) || !STR_NONEMPTY( name ) ) return;
+
+    nameInfo.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    nameInfo.objectType   = type;
+    nameInfo.objectHandle = handle;
+    nameInfo.pObjectName  = name;
+
+    vkSetDebugUtilsObjectNameEXT( vkDevice->device, &nameInfo );
+}
+
+// Select the best physical device for graphics and presentation
+static riStatus
+_rhioVK_pick_physical( riVK_Device * vkDevice )
+{
+    VkPhysicalDevice * devices    = NULL;
+    riU32              count      = 0u;
+    VkResult           result     = VK_SUCCESS;
+    VkPhysicalDevice   best       = VK_NULL_HANDLE;
+    riU32              bestScore  = 0u;
+    riU32              i          = 0u;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+
+    result = vkEnumeratePhysicalDevices( vkDevice->instance, &count, NULL );
+    if( RI_UNLIKELY( result != VK_SUCCESS || count == 0u ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: No Vulkan physical devices found" );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    devices = (VkPhysicalDevice *)RI_MALLOC( (riSize)count * sizeof( VkPhysicalDevice ) );
+    if( RI_UNLIKELY( devices == NULL ) ) return RI_ERROR_OUT_OF_MEMORY;
+
+    result = vkEnumeratePhysicalDevices( vkDevice->instance, &count, devices );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            RI_FREE( devices );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    for( i = 0u; i < count; ++i )
+        {
+            VkPhysicalDeviceProperties properties = RI_ZERO_INIT;
+            riU32                      score      = 0u;
+
+            vkGetPhysicalDeviceProperties( devices[i], &properties );
+
+            switch( properties.deviceType )
+                {
+                case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: score = 1000u; break;
+                case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: score = 100u; break;
+                case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: score = 10u; break;
+                default: score = 1u; break;
+                }
+
+            if( score > bestScore )
+                {
+                    bestScore  = score;
+                    best       = devices[i];
+                    vkDevice->properties = properties;
+                }
+    }
+
+    RI_FREE( devices );
+
+    if( best == VK_NULL_HANDLE )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: No suitable physical device found" );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    vkDevice->physicalDevice = best;
+
+    return RI_SUCCESS;
+}
+
+// Create the logical device, graphics queue and VMA allocator
+static riStatus
+_rhioVK_create_logical( riVK_Device * vkDevice )
+{
+    VkDeviceQueueCreateInfo             queueInfo    = RI_ZERO_INIT;
+    VkDeviceCreateInfo                  deviceInfo   = RI_ZERO_INIT;
+    VkPhysicalDeviceVulkan13Features    features13   = RI_ZERO_INIT;
+    const char * const                  swapchainExtensions[1] = { "VK_KHR_swapchain" };
+    float                               queuePriority = 1.0f;
+    VkQueueFamilyProperties *           families      = NULL;
+    riU32                               familyCount   = 0u;
+    VkResult                            result        = VK_SUCCESS;
+    riU32                               i             = 0u;
+    VmaAllocatorCreateInfo              allocatorInfo = RI_ZERO_INIT;
+    VkCommandBufferAllocateInfo         bufferInfo    = RI_ZERO_INIT;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Queue Family Selection
+    //----------------------------------------------------------
+    vkGetPhysicalDeviceQueueFamilyProperties( vkDevice->physicalDevice, &familyCount, NULL );
+    if( RI_UNLIKELY( familyCount == 0u ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Physical device exposes no queue families" );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    families = (VkQueueFamilyProperties *)RI_MALLOC( (riSize)familyCount * sizeof( VkQueueFamilyProperties ) );
+    if( RI_UNLIKELY( families == NULL ) ) return RI_ERROR_OUT_OF_MEMORY;
+
+    vkGetPhysicalDeviceQueueFamilyProperties( vkDevice->physicalDevice, &familyCount, families );
+
+    vkDevice->queueFamily = (riU32)-1;
+    for( i = 0u; i < familyCount; ++i )
+        {
+            if( RI_FLAG_CHECK( families[i].queueFlags, VK_QUEUE_GRAPHICS_BIT ) != 0u )
+                {
+                    vkDevice->queueFamily = i;
+                    break;
+                }
+        }
+
+    RI_FREE( families );
+
+    if( vkDevice->queueFamily == (riU32)-1 )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Physical device exposes no graphics queue family" );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Feature Chain
+    //----------------------------------------------------------
+    // Dynamic rendering and synchronization2 are core Vulkan 1.3 features that
+    // still must be enabled explicitly through the feature chain
+    features13.sType              = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    features13.dynamicRendering   = VK_TRUE;
+    features13.synchronization2   = VK_TRUE;
+
+    queueInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueInfo.queueFamilyIndex = vkDevice->queueFamily;
+    queueInfo.queueCount       = 1u;
+    queueInfo.pQueuePriorities = &queuePriority;
+
+    deviceInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceInfo.pNext                   = &features13;
+    deviceInfo.queueCreateInfoCount    = 1u;
+    deviceInfo.pQueueCreateInfos       = &queueInfo;
+    deviceInfo.enabledExtensionCount   = 1u;
+    deviceInfo.ppEnabledExtensionNames = swapchainExtensions;
+
+    result = vkCreateDevice( vkDevice->physicalDevice, &deviceInfo, NULL, &vkDevice->device );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateDevice failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    volkLoadDevice( vkDevice->device );
+    vkGetDeviceQueue( vkDevice->device, vkDevice->queueFamily, 0u, &vkDevice->queue );
+
+    // Vulkan Memory Allocator
+    //----------------------------------------------------------
+    allocatorInfo.instance          = vkDevice->instance;
+    allocatorInfo.physicalDevice    = vkDevice->physicalDevice;
+    allocatorInfo.device            = vkDevice->device;
+    allocatorInfo.vulkanApiVersion  = vkDevice->maxApiVersion;
+
+    result = vmaCreateAllocator( &allocatorInfo, &vkDevice->allocator );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vmaCreateAllocator failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Shader Buffer Layout
+    //----------------------------------------------------------
+    // One layout shared by every builtin pipeline: set 0 / binding 0 is a
+    // read-only storage buffer consumed by the vertex-pulling shader
+    {
+        VkDescriptorSetLayoutBinding binding  = RI_ZERO_INIT;
+        VkDescriptorSetLayoutCreateInfo layoutInfo = RI_ZERO_INIT;
+
+        binding.binding            = 0u;
+        binding.descriptorType     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.descriptorCount    = 1u;
+        binding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+
+        layoutInfo.sType           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount    = 1u;
+        layoutInfo.pBindings       = &binding;
+
+        result = vkCreateDescriptorSetLayout( vkDevice->device, &layoutInfo, NULL, &vkDevice->shaderBufferLayout );
+        if( RI_UNLIKELY( result != VK_SUCCESS ) )
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateDescriptorSetLayout failed (%d)", (int)result );
+                return RI_ERROR_BACKEND_INIT;
+            }
+    }
+
+    // Blocking Upload Resources
+    //----------------------------------------------------------
+    {
+        VkCommandPoolCreateInfo poolInfo = RI_ZERO_INIT;
+        VkFenceCreateInfo       fenceInfo = RI_ZERO_INIT;
+
+        poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = vkDevice->queueFamily;
+
+        result = vkCreateCommandPool( vkDevice->device, &poolInfo, NULL, &vkDevice->uploadCommandPool );
+        if( RI_UNLIKELY( result != VK_SUCCESS ) )
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateCommandPool failed (%d)", (int)result );
+                return RI_ERROR_BACKEND_INIT;
+            }
+
+        bufferInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        bufferInfo.commandPool        = vkDevice->uploadCommandPool;
+        bufferInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        bufferInfo.commandBufferCount = 1u;
+
+        result = vkAllocateCommandBuffers( vkDevice->device, &bufferInfo, &vkDevice->uploadCommandBuffer );
+        if( RI_UNLIKELY( result != VK_SUCCESS ) )
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateCommandBuffers failed (%d)", (int)result );
+                return RI_ERROR_BACKEND_INIT;
+            }
+
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+        result = vkCreateFence( vkDevice->device, &fenceInfo, NULL, &vkDevice->uploadFence );
+        if( RI_UNLIKELY( result != VK_SUCCESS ) )
+            {
+                TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateFence failed (%d)", (int)result );
+                return RI_ERROR_BACKEND_INIT;
+            }
+    }
+
+    // Device Capability Snapshot
+    //----------------------------------------------------------
+    {
+        VkPhysicalDeviceFeatures deviceFeatures = RI_ZERO_INIT;
+
+        vkGetPhysicalDeviceFeatures( vkDevice->physicalDevice, &deviceFeatures );
+        vkDevice->fillModeNonSolid = deviceFeatures.fillModeNonSolid ? 1u : 0u;
+    }
+
+    return RI_SUCCESS;
+}
+
+//----------------------------------------------------------------------------------
+// Backend Slot Stubs
+//----------------------------------------------------------------------------------
+// Slots still pending their implementation milestone report clear errors so the
+// frontend surfaces them instead of crashing on NULL dispatch
+
+// Create a Vulkan command queue wrapper
+static riStatus
+_rhioVK_create_command_queue( riDevice device, riCommandQueue * outQueue )
+{
+    UNUSED( device );
+    UNUSED( outQueue );
+
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Command queues are not implemented yet" );
+
+    return RI_ERROR_BACKEND_UNAVAIL;
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Backend Implementation                                       [>>VK_IMPL<<]
+//----------------------------------------------------------------------------------
+
+// Initialize Vulkan state and allocate default resources
+static riStatus
+_rhioVK_init( riDevice device, const riBackendInitInfo * info )
+{
+    riVK_Device *           vkDevice       = (riVK_Device *)device;
+    const riInstanceInfo *  instanceInfo   = NULL;
+    const char **           layerNames     = NULL;
+    const char **           extensionNames = NULL;
+    riU32                   layerCount     = 0u;
+    riU32                   addKhronos     = 0u;
+    riU32                   debugUtils     = 0u;
+    riU32                   apiVersion     = VK_API_VERSION_1_4;
+    riU32                   loaderVersion  = 0u;
+    VkApplicationInfo       appInfo        = RI_ZERO_INIT;
+    VkInstanceCreateInfo    createInfo     = RI_ZERO_INIT;
+    VkDebugUtilsMessengerCreateInfoEXT messengerInfo = RI_ZERO_INIT;
+    VkResult                result         = VK_SUCCESS;
+    bool                    validationLayerMissing = false;
+
+    RI_GUARD( device != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+
+    instanceInfo = &info->base.instance;
+
+    // Loader Initialization
+    //----------------------------------------------------------
+    result = volkInitialize();
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Failed to load the Vulkan loader (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    loaderVersion = volkGetInstanceVersion();
+
+    // API Version Clamp
+    //----------------------------------------------------------
+    // The instance is clamped to the loader/driver version so hosts with a
+    // Vulkan 1.3 stack still work; dynamic rendering is available from 1.3 on
+    if( loaderVersion != 0u && loaderVersion < apiVersion ) apiVersion = loaderVersion;
+
+    if( apiVersion < VK_API_VERSION_1_3 )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan 1.3+ is required, loader reports 0x%08x", loaderVersion );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    if( apiVersion < VK_API_VERSION_1_4 )
+        {
+            TRACELOG( RI_LOG_WARNING, "BACKEND VK: Loader only provides Vulkan 1.3, requesting 1.4 features will fail" );
+        }
+
+    vkDevice->maxApiVersion = apiVersion;
+
+    // Validation Layers
+    //----------------------------------------------------------
+    // RI_DEVICE_FLAG_DEBUG enables VK_LAYER_KHRONOS_validation automatically
+    // when installed. Layers requested through riInstanceInfo always load.
+    layerCount = instanceInfo->layerCount;
+
+    if( RI_FLAG_CHECK( info->flags, RI_DEVICE_FLAG_DEBUG ) != 0u )
+        {
+            if( _rhioVK_instance_layer_available( "VK_LAYER_KHRONOS_validation" ) )
+                {
+                    addKhronos = 1u;
+                }
+            else
+                {
+                    validationLayerMissing = true;
+                }
+        }
+
+    // Debug Utils
+    //----------------------------------------------------------
+    // VK_EXT_debug_utils feeds validation messages into TRACELOG
+    debugUtils = RI_FLAG_CHECK( info->flags, RI_DEVICE_FLAG_DEBUG ) != 0u ? 1u : 0u;
+
+    // Instance Creation
+    //----------------------------------------------------------
+    appInfo.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName   = STR_NONEMPTY( info->base.appName ) ? info->base.appName : "rhio";
+    appInfo.applicationVersion = RHIO_VERSION;
+    appInfo.pEngineName        = "rhio";
+    appInfo.engineVersion      = RHIO_VERSION;
+    appInfo.apiVersion         = apiVersion;
+
+    // NOTE: Layer/extension pointer arrays are built from borrowed memory.
+    // They only need to outlive vkCreateInstance below.
+    {
+        riU32 totalLayers     = layerCount + addKhronos;
+        riU32 totalExtensions = instanceInfo->extensionCount + debugUtils;
+
+        layerNames     = totalLayers > 0u
+                             ? (const char **)RI_CALLOC( 1, (riSize)totalLayers * sizeof( char * ) )
+                             : NULL;
+        extensionNames = totalExtensions > 0u
+                             ? (const char **)RI_CALLOC( 1, (riSize)totalExtensions * sizeof( char * ) )
+                             : NULL;
+
+        if( RI_UNLIKELY( totalLayers > 0u && layerNames == NULL ) )
+            {
+                return RI_ERROR_OUT_OF_MEMORY;
+            }
+
+        if( RI_UNLIKELY( totalExtensions > 0u && extensionNames == NULL ) )
+            {
+                RI_FREE( layerNames );
+                return RI_ERROR_OUT_OF_MEMORY;
+            }
+
+        if( instanceInfo->layers != NULL )
+            {
+                for( riU32 i = 0u; i < layerCount; ++i ) layerNames[i] = instanceInfo->layers[i];
+            }
+
+        if( addKhronos )
+            {
+                layerNames[layerCount] = "VK_LAYER_KHRONOS_validation";
+            }
+        if( instanceInfo->extensions != NULL )
+            {
+                for( riU32 i = 0u; i < instanceInfo->extensionCount; ++i )
+                    {
+                        extensionNames[i] = instanceInfo->extensions[i];
+                    }
+            }
+
+        if( debugUtils )
+            {
+                extensionNames[instanceInfo->extensionCount] = "VK_EXT_debug_utils";
+            }
+
+        createInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo        = &appInfo;
+        createInfo.enabledLayerCount       = totalLayers;
+        createInfo.ppEnabledLayerNames     = layerNames;
+        createInfo.enabledExtensionCount   = totalExtensions;
+        createInfo.ppEnabledExtensionNames = extensionNames;
+
+        result = vkCreateInstance( &createInfo, NULL, &vkDevice->instance );
+
+        RI_FREE( (void *)layerNames );
+        RI_FREE( (void *)extensionNames );
+    }
+
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateInstance failed (%d)", (int)result );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    volkLoadInstance( vkDevice->instance );
+
+    // Surface Extension Tracking
+    //----------------------------------------------------------
+    vkDevice->surfaceExtensions = _rhioVK_surface_extension_mask( instanceInfo );
+
+    // Debug Messenger
+    //----------------------------------------------------------
+    if( debugUtils != 0u )
+        {
+            messengerInfo.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
+                                            | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT
+                                            | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+                                            | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            messengerInfo.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                                            | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                                            | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            messengerInfo.pfnUserCallback = _rhioVK_debug_callback;
+
+            result = vkCreateDebugUtilsMessengerEXT( vkDevice->instance, &messengerInfo, NULL,
+                                                     &vkDevice->debugMessenger );
+            if( RI_UNLIKELY( result != VK_SUCCESS ) )
+                {
+                    TRACELOG( RI_LOG_WARNING, "BACKEND VK: Debug messenger unavailable (%d)", (int)result );
+                    vkDevice->debugMessenger = VK_NULL_HANDLE;
+                }
+        }
+
+    if( validationLayerMissing )
+        {
+            TRACELOG( RI_LOG_WARNING, "BACKEND VK: VK_LAYER_KHRONOS_validation is not installed" );
+        }
+
+    // Device Selection
+    //----------------------------------------------------------
+    {
+        riStatus status = _rhioVK_pick_physical( vkDevice );
+        if( RI_FAILED( status ) ) return status;
+
+        status = _rhioVK_create_logical( vkDevice );
+        if( RI_FAILED( status ) ) return status;
+    }
+
+    // Context Diagnostics
+    //----------------------------------------------------------
+    TRACELOG( RI_LOG_INFO, "BACKEND VK: Initialized context" );
+    TRACELOG( RI_LOG_INFO,
+              "    > API:     %u.%u.%u",
+              (unsigned)VK_API_VERSION_MAJOR( vkDevice->maxApiVersion ),
+              (unsigned)VK_API_VERSION_MINOR( vkDevice->maxApiVersion ),
+              (unsigned)VK_API_VERSION_PATCH( vkDevice->maxApiVersion ) );
+    TRACELOG( RI_LOG_INFO, "    > Device:  %s", vkDevice->properties.deviceName );
+    TRACELOG( RI_LOG_INFO, "    > Vendor:  0x%04x", (unsigned)vkDevice->properties.vendorID );
+    TRACELOG( RI_LOG_INFO, "    > Driver:  0x%08x", (unsigned)vkDevice->properties.driverVersion );
+
+    return RI_SUCCESS;
+}
+
+// Free Vulkan resources and tear down device state
+static void
+_rhioVK_shutdown( riDevice device )
+{
+    riVK_Device   emptyDevice = RI_ZERO_INIT;
+    riVK_Device * vkDevice    = (riVK_Device *)device;
+
+    if( NULL != vkDevice )
+        {
+            // NOTE: Queues, command lists and swapchains are caller-owned and must
+            // be destroyed before the device, matching the GL backend contract
+
+            if( vkDevice->device != VK_NULL_HANDLE )
+                {
+                    vkDeviceWaitIdle( vkDevice->device );
+
+                    if( vkDevice->uploadFence != VK_NULL_HANDLE )
+                        {
+                            vkDestroyFence( vkDevice->device, vkDevice->uploadFence, NULL );
+                        }
+                    if( vkDevice->uploadCommandPool != VK_NULL_HANDLE )
+                        {
+                            vkDestroyCommandPool( vkDevice->device, vkDevice->uploadCommandPool, NULL );
+                        }
+                    if( vkDevice->shaderBufferLayout != VK_NULL_HANDLE )
+                        {
+                            vkDestroyDescriptorSetLayout( vkDevice->device, vkDevice->shaderBufferLayout, NULL );
+                        }
+                    if( vkDevice->allocator != VK_NULL_HANDLE )
+                        {
+                            vmaDestroyAllocator( vkDevice->allocator );
+                        }
+
+                    vkDestroyDevice( vkDevice->device, NULL );
+                }
+
+            if( vkDevice->debugMessenger != VK_NULL_HANDLE )
+                {
+                    vkDestroyDebugUtilsMessengerEXT( vkDevice->instance, vkDevice->debugMessenger, NULL );
+                }
+
+            if( vkDevice->instance != VK_NULL_HANDLE )
+                {
+                    vkDestroyInstance( vkDevice->instance, NULL );
+                }
+
+            emptyDevice.base = vkDevice->base; // Preserve frontend dispatch state
+            *vkDevice        = emptyDevice;
+        }
+
+    TRACELOG( RI_LOG_INFO, "BACKEND VK: Shutdown complete" );
+}
+
+//----------------------------------------------------------------------------------
+// Backend Descriptor Setup
+//----------------------------------------------------------------------------------
+
+// Populate the backend descriptor with Vulkan implementations
 static riStatus
 _rhioVK_registerBackend( riBackendDesc * desc )
 {
@@ -4944,22 +6052,24 @@ _rhioVK_registerBackend( riBackendDesc * desc )
 
     RI_GUARD( desc != NULL, RI_ERROR_INVALID_PARAM );
 
+    // Preserve Requested Flavor
+    //----------------------------------------------------------
     flags = desc->flags;
 
     _rhioBackendDescInit( desc );
 
     // Backend Descriptor Setup
     //----------------------------------------------------------
-    desc->name    = "Vulkan";
-    desc->backend = RI_BACKEND_VULKAN;
-    desc->flags   = flags;
+    desc->name       = "Vulkan";
+    desc->backend    = RI_BACKEND_VULKAN;
+    desc->deviceSize = (riSize)sizeof( riVK_Device );
+    desc->flags      = flags;
 
-    // VTable
+    // Backend VTable
+    //----------------------------------------------------------
     desc->vtable = &s_vk_vtable;
 
-    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Vulkan backend registration is not implemented yet" );
-
-    return RI_ERROR_BACKEND_UNAVAIL;
+    return RI_SUCCESS;
 }
 #    endif
 

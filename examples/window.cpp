@@ -133,16 +133,18 @@ EndWindowFrame()
     // NOTE: Presentation is driven by rhioSwapchainPresent().
 }
 
-#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
 void
 PresentWindow()
 {
+#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
     if( windowState.handle != nullptr )
         {
             glfwSwapBuffers( windowState.handle );
         }
-}
+#else
+    // NOTE: Vulkan presentation is owned by the rhio swapchain
 #endif
+}
 
 void
 SetWindowResizeCallback( WindowResizeCallback callback )

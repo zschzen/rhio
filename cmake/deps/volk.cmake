@@ -6,7 +6,7 @@ if(NOT EMSCRIPTEN)
   message(STATUS "+ Volk")
   message(STATUS "")
 
-  set(VOLK_VERSION vulkan-sdk-1.4.341.0)
+  set(VOLK_VERSION vulkan-sdk-1.4.350.0)
   set(RHIO_VOLK_FROM_SYSTEM OFF)
 
   find_package(volk QUIET)
@@ -19,7 +19,7 @@ if(NOT EMSCRIPTEN)
       GIT_TAG ${VOLK_VERSION}
       OPTIONS
         "VOLK_HEADERS_ONLY ON"
-        "VOLK_PULL_IN_VULKAN ON"
+        "VOLK_PULL_IN_VULKAN OFF"
         "VOLK_INSTALL OFF"
     )
   else()

@@ -39,6 +39,4 @@ void         SetWindowKeyCallback( WindowKeyCallback callback );
 GLFWwindow * GetWindowHandle();
 WindowGlProc GetWindowGlProcAddress( const char * name );
 
-#if defined( RHIO_EXAMPLE_BACKEND_OPENGL )
 void PresentWindow();
-#endif
