@@ -5138,6 +5138,7 @@ typedef struct riVK_Device
     riU32                      maxApiVersion;      // Clamped instance API version
     riU32                      fillModeNonSolid;   // Wireframe rasterization supported
     riU32                      storageBufferOffsetAlignment; // Min SSBO bind offset alignment
+    riU32                      nextSwapchainToken; // Monotonic swapchain identity for stale views
     VkPhysicalDeviceProperties properties;         // Device metadata for logs and limits
 
 } riVK_Device;
@@ -5193,6 +5194,8 @@ typedef struct riVK_TextureView
     VkImageView       view;            // Owned view, VK_NULL_HANDLE for swapchain views
     bool              isSwapchainView; // View borrows a swapchain-owned image view
     riU32             imageIndex;      // Swapchain image slot when isSwapchainView
+    riU32             token;           // Swapchain allocation stamp; mismatch = freed swapchain
+    riU32             generation;      // Swapchain view-set stamp; mismatch = dead image views
 
 } riVK_TextureView;
 
@@ -5259,6 +5262,10 @@ typedef struct riVK_Swapchain
     riU32               acquiredSlot;     // Frame slot of the current acquire
     riU32               frameCounter;     // Total acquired frames, drives slot rotation
     bool                needsRecreate;    // Out-of-date swapchain, recreate on next acquire
+    bool                frameSubmitted;   // Current frame went through submit; present requires it
+    bool                renderFinishedStale[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Signaled but unconsumed semaphores
+    riU32               token;            // Unique per swapchain allocation; stale views rejected
+    riU32               generation;       // Bumped when image views die; stale views rejected
     riVK_SwapchainState state;            // Acquire/present lifetime state
     riVK_Texture        textures[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Facade textures (inline)
     VkImageView         imageViews[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
@@ -6298,11 +6305,12 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     riVK_CommandQueue *         vkQueue        = (riVK_CommandQueue *)queue;
     riVK_Swapchain *            vkSwapchain    = NULL;
     riVK_CommandList *          vkList         = NULL;
-    VkSemaphoreSubmitInfo       waitInfo       = RI_ZERO_INIT;
+    VkSemaphoreSubmitInfo       waitInfos[2];
     VkSemaphoreSubmitInfo       signalInfo     = RI_ZERO_INIT;
     VkCommandBufferSubmitInfo * cmdBufferInfos = NULL;
     VkSubmitInfo2               submitInfo     = RI_ZERO_INIT;
     VkResult                    result         = VK_SUCCESS;
+    riU32                       waitCount      = 0u;
     riU32                       i              = 0u;
 
     RI_GUARD( vkQueue != NULL, RI_ERROR_INVALID_PARAM );
@@ -6350,21 +6358,41 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
     // The submit waits for the acquire semaphore of the frame slot and signals
     // the render-finished semaphore of the acquired image plus the slot fence
     // guarding command buffer reuse
-    waitInfo.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-    waitInfo.semaphore = vkSwapchain->imageAvailable[vkSwapchain->acquiredSlot];
-    // NOTE: ALL_COMMANDS instead of COLOR_ATTACHMENT_OUTPUT so empty frames
-    // (no render pass recorded yet) still signal their semaphores
-    waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    memset( waitInfos, 0, sizeof( waitInfos ) );
+
+    waitInfos[waitCount].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    waitInfos[waitCount].semaphore = vkSwapchain->imageAvailable[vkSwapchain->acquiredSlot];
+    // NOTE: COLOR_ATTACHMENT_OUTPUT matches the acquire handoff; the semaphore
+    // still signals at the end of the submission regardless of the mask
+    waitInfos[waitCount].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    waitCount++;
+
+    // Stale render-finished semaphore: a failed present signaled it without
+    // waiting; consume it here so re-signaling below stays legal
+    if( vkSwapchain->renderFinishedStale[vkSwapchain->imageIndex] )
+        {
+            waitInfos[waitCount].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            waitInfos[waitCount].semaphore = vkSwapchain->renderFinished[vkSwapchain->imageIndex];
+            waitInfos[waitCount].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            waitCount++;
+
+            vkSwapchain->renderFinishedStale[vkSwapchain->imageIndex] = false;
+        }
 
     signalInfo.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     signalInfo.semaphore = vkSwapchain->renderFinished[vkSwapchain->imageIndex];
-    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    // NOTE: Same as the wait mask; the semaphore signals at the end of the
+    // submission regardless of the stage choice
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
     cmdBufferInfos = (VkCommandBufferSubmitInfo *)RI_MALLOC( (riSize)info->commandListCount * sizeof( *cmdBufferInfos ) );
     if( RI_UNLIKELY( cmdBufferInfos == NULL ) )
         {
             return RI_ERROR_OUT_OF_MEMORY;
         }
+
+    // NOTE: Heap memory feeds Vulkan structs here; pNext must be zeroed
+    memset( cmdBufferInfos, 0, (riSize)info->commandListCount * sizeof( *cmdBufferInfos ) );
 
     for( i = 0u; i < info->commandListCount; ++i )
         {
@@ -6373,8 +6401,8 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
         }
 
     submitInfo.sType                   = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-    submitInfo.waitSemaphoreInfoCount  = 1u;
-    submitInfo.pWaitSemaphoreInfos     = &waitInfo;
+    submitInfo.waitSemaphoreInfoCount  = waitCount;
+    submitInfo.pWaitSemaphoreInfos     = waitInfos;
     submitInfo.commandBufferInfoCount  = info->commandListCount;
     submitInfo.pCommandBufferInfos     = cmdBufferInfos;
     submitInfo.signalSemaphoreInfoCount = 1u;
@@ -6398,9 +6426,13 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
             vkList              = (riVK_CommandList *)info->commandLists[i];
             vkList->state       = RI_VK_COMMAND_LIST_STATE_PENDING;
             vkList->pendingSlot = vkSwapchain->acquiredSlot;
+            // Empty lists carry no render target; stamping here keeps the
+            // fence reaper's ownership check exact for every submission
+            vkList->target      = vkSwapchain;
         }
 
     vkSwapchain->fenceBusy[vkSwapchain->acquiredSlot] = true;
+    vkSwapchain->frameSubmitted                       = true;
     vkQueue->frameTarget = NULL; // next submit waits for the matching present
 
     return RI_SUCCESS;
@@ -6871,12 +6903,32 @@ _rhioVK_pick_surface_format( riVK_Device * vkDevice, VkSurfaceKHR surface, riTex
                 }
         }
 
-    *outFormat     = formats[0].format;
-    *outColorSpace = formats[0].colorSpace;
+    // Legacy Undefined Surface List
+    //----------------------------------------------------------
+    // A single VK_FORMAT_UNDEFINED entry means "any format"; pick the
+    // requested one or the display-preferred BGRA default
+    for( i = 0u; i < count; ++i )
+        {
+            if( formats[i].format != VK_FORMAT_UNDEFINED ) continue;
+
+            *outFormat = requestedVk;
+            if( *outFormat == VK_FORMAT_UNDEFINED )
+                {
+                    *outFormat = VK_FORMAT_B8G8R8A8_UNORM;
+                }
+
+            if( _rhioVK_format_from_vk( *outFormat, &mapped ) == RI_SUCCESS )
+                {
+                    *outColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+                    RI_FREE( formats );
+                    return RI_SUCCESS;
+                }
+        }
 
     RI_FREE( formats );
 
-    return RI_SUCCESS;
+    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Surface exposes no mappable color format" );
+    return RI_ERROR_BACKEND_UNAVAIL;
 }
 
 // Create or recreate the swapchain object and its per-image resources
@@ -6993,11 +7045,15 @@ _rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain )
     // Image Handles and Views
     //----------------------------------------------------------
     result = vkGetSwapchainImagesKHR( vkDevice->device, vkSwapchain->swapchain, &imageCount, images );
-    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+    // NOTE: VK_INCOMPLETE means the driver exposed more images than the
+    //       first call filled; the returned count is still authoritative
+    if( RI_UNLIKELY( result != VK_SUCCESS && result != VK_INCOMPLETE ) )
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkGetSwapchainImagesKHR failed (%d)", (int)result );
             return RI_ERROR_BACKEND_INIT;
         }
+
+    RI_GUARD( imageCount <= RHIO_VK_MAX_SWAPCHAIN_IMAGES, RI_ERROR_BACKEND_INIT );
 
     // Facades beyond the new image count are cleared on shrink
     for( i = imageCount; i < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++i )
@@ -7068,6 +7124,10 @@ _rhioVK_destroy_swapchain_object( riVK_Swapchain * vkSwapchain )
 {
     riVK_Device * vkDevice = vkSwapchain->device;
     riU32         i        = 0u;
+
+    // Borrowed image views die here; the generation bump invalidates every
+    // application-created view stamped before this call
+    vkSwapchain->generation++;
 
     for( i = 0u; i < RHIO_VK_MAX_SWAPCHAIN_IMAGES; ++i )
         {
@@ -7179,6 +7239,10 @@ _rhioVK_create_swapchain( riDevice device, riCommandQueue queue, const riSwapcha
     vkSwapchain->colorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     vkSwapchain->extent.width  = info->width;
     vkSwapchain->extent.height = info->height;
+    // NOTE: Monotonic identity so stale views from freed swapchains are
+    //       rejected even when calloc reuses the previous address
+    vkDevice->nextSwapchainToken += 1u;
+    vkSwapchain->token = vkDevice->nextSwapchainToken;
 
     // Frame Depth
     //----------------------------------------------------------
@@ -7321,7 +7385,10 @@ _rhioVK_reap_slots( riVK_Swapchain * vkSwapchain, bool blocking )
 
             for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
                 {
-                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING && cursor->pendingSlot == slot )
+                    // Lists pending on another swapchain's fence stay untouched
+                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING
+                        && cursor->pendingSlot == slot
+                        && cursor->target == vkSwapchain )
                         {
                             cursor->state = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
                         }
@@ -7354,6 +7421,12 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
     //----------------------------------------------------------
     if( vkSwapchain->needsRecreate )
         {
+            // Completed-Frame Reaping
+            //----------------------------------------------------------
+            // Blocks until every pending frame finished, so the recreation
+            // below never destroys images a live command buffer references
+            _rhioVK_reap_slots( vkSwapchain, true );
+
             _rhioVK_destroy_swapchain_object( vkSwapchain );
 
             status = _rhioVK_create_swapchain_object( vkSwapchain );
@@ -7383,6 +7456,12 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
                                             vkSwapchain->imageAvailable[slot], VK_NULL_HANDLE,
                                             &vkSwapchain->imageIndex );
             if( result != VK_ERROR_OUT_OF_DATE_KHR ) break;
+
+            // Completed-Frame Reaping
+            //----------------------------------------------------------
+            // Same as above: finish pending frames before destroying the
+            // images the retry cycle is about to tear down
+            _rhioVK_reap_slots( vkSwapchain, true );
 
             _rhioVK_destroy_swapchain_object( vkSwapchain );
 
@@ -7416,8 +7495,17 @@ _rhioVK_get_current_texture( riSwapchain swapchain, riTexture * outTexture )
 
     // Frame Arming
     //----------------------------------------------------------
+    if( vkSwapchain->queue->frameTarget != NULL
+        && vkSwapchain->queue->frameTarget != vkSwapchain )
+        {
+            TRACELOG( RI_LOG_ERROR,
+                      "BACKEND VK: Another swapchain holds the armed frame; present or discard it first" );
+            return RI_ERROR_INVALID_STATE;
+        }
+
     vkSwapchain->acquiredSlot = slot;
     vkSwapchain->state        = RI_VK_SWAPCHAIN_STATE_ACQUIRED;
+    vkSwapchain->frameSubmitted = false;
     vkSwapchain->queue->frameTarget = vkSwapchain;
 
     *outTexture = (riTexture)&vkSwapchain->textures[vkSwapchain->imageIndex];
@@ -7437,6 +7525,12 @@ _rhioVK_present( riSwapchain swapchain )
     if( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_LOST ) return RI_ERROR_SURFACE_LOST;
     RI_GUARD( vkSwapchain->state == RI_VK_SWAPCHAIN_STATE_ACQUIRED, RI_ERROR_INVALID_STATE );
 
+    // Submit Requirement
+    //----------------------------------------------------------
+    // Presenting an unsubmitted frame waits on a render-finished semaphore
+    // that will never signal, stalling the queue forever
+    RI_GUARD( vkSwapchain->frameSubmitted, RI_ERROR_INVALID_STATE );
+
     // Queue Presentation
     //----------------------------------------------------------
     presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -7451,6 +7545,16 @@ _rhioVK_present( riSwapchain swapchain )
     if( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR )
         {
             vkSwapchain->needsRecreate = true;
+
+            // Stale Semaphore Handling
+            //----------------------------------------------------------
+            // A failed present never waited on the render-finished
+            // semaphore the submit signaled; the next submit targeting
+            // this image waits on it first so re-signaling stays legal
+            if( result == VK_ERROR_OUT_OF_DATE_KHR )
+                {
+                    vkSwapchain->renderFinishedStale[vkSwapchain->imageIndex] = true;
+                }
         }
     else if( result == VK_ERROR_SURFACE_LOST_KHR )
         {
@@ -7481,6 +7585,27 @@ _rhioVK_destroy_swapchain( riSwapchain swapchain )
 
     // Frames referencing swapchain images must be complete first
     vkDeviceWaitIdle( vkSwapchain->device->device );
+
+    // Command List Restatement
+    //----------------------------------------------------------
+    // The GPU is idle, so lists pending on this swapchain's fences completed;
+    // restating them here keeps a freshly created swapchain (whose fences are
+    // never busy) from stranding them in PENDING forever
+    if( vkSwapchain->queue != NULL )
+        {
+            riVK_CommandList * cursor = NULL;
+
+            for( cursor = vkSwapchain->queue->commandLists; cursor != NULL; cursor = cursor->next )
+                {
+                    if( cursor->state == RI_VK_COMMAND_LIST_STATE_PENDING
+                        && cursor->target == vkSwapchain )
+                        {
+                            cursor->state       = RI_VK_COMMAND_LIST_STATE_SUBMITTED;
+                            cursor->pendingSlot = 0u;
+                            cursor->target      = NULL;
+                        }
+                }
+        }
 
     if( vkSwapchain->queue != NULL && vkSwapchain->queue->frameTarget == vkSwapchain )
         {
@@ -8000,6 +8125,8 @@ _rhioVK_create_texture_view( riDevice device, const riTextureViewInfo * info, ri
     vkView->texture         = vkTexture;
     vkView->isSwapchainView = true;
     vkView->imageIndex      = vkTexture->imageIndex;
+    vkView->token           = vkSwapchain->token;
+    vkView->generation      = vkSwapchain->generation;
     vkView->view            = vkSwapchain->imageViews[vkView->imageIndex];
 
     // View Handle Handoff
@@ -8091,11 +8218,17 @@ _rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * i
                     return RI_ERROR_BACKEND_UNAVAIL;
                 }
 
-            vkSwapchain = vkView->texture->swapchain;
-            if( vkSwapchain != vkList->queue->frameTarget )
+            // View Liveness
+            //----------------------------------------------------------
+            // Identity is checked against the armed frame BEFORE any deref of
+            // the view's texture pointer, which may be freed swapchain memory
+            vkSwapchain = vkList->queue->frameTarget;
+            if( vkSwapchain == NULL
+                || vkView->token != vkSwapchain->token
+                || vkView->generation != vkSwapchain->generation )
                 {
                     TRACELOG( RI_LOG_ERROR,
-                              "BACKEND VK: Render pass targets a swapchain that is not the acquired frame" );
+                              "BACKEND VK: Render pass uses a texture view from a dead swapchain generation" );
                     return RI_ERROR_INVALID_STATE;
                 }
         }
