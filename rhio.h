@@ -1035,6 +1035,9 @@ RI_API riStatus rhioCreateBuffer( riDevice device, const riBufferInfo * info, ri
 RI_API void     rhioDestroyBuffer( riBuffer buffer );
 RI_API void     rhioGetBufferInfo( riBuffer buffer, riBufferInfo * outInfo );
 
+// Textures
+RI_API void rhioGetTextureInfo( riTexture texture, riTextureInfo * outInfo );
+
 // Render pipelines
 RI_API riStatus rhioCreateRenderPipeline( riDevice device, const riRenderPipelineInfo * info,
                                           riRenderPipeline * outPipeline );
@@ -1756,6 +1759,24 @@ rhioGetBufferInfo( riBuffer buffer, riBufferInfo * outInfo )
     if( bufferBase->vtable != NULL && bufferBase->vtable->get_buffer_info != NULL )
         {
             bufferBase->vtable->get_buffer_info( buffer, outInfo );
+        }
+}
+
+// Return texture metadata
+// NOTE: Swapchain facades report the current backbuffer extent, which changes
+//       when the swapchain recreates after a window resize
+RI_API void
+rhioGetTextureInfo( riTexture texture, riTextureInfo * outInfo )
+{
+    riTextureBase * textureBase = NULL;
+
+    if( texture == NULL || outInfo == NULL ) return;
+
+    textureBase = (riTextureBase *)texture;
+
+    if( textureBase->vtable != NULL && textureBase->vtable->get_texture_info != NULL )
+        {
+            textureBase->vtable->get_texture_info( texture, outInfo );
         }
 }
 
@@ -4971,6 +4992,76 @@ _rhioGL_registerBackend( riBackendDesc * desc )
 #        endif
 
 //----------------------------------------------------------------------------------
+// Built-in Shader Spir-V
+//----------------------------------------------------------------------------------
+// Compiled offline with glslangValidator -V -g0; vertex pulling reads vec4
+// position + vec4 color pairs from set 0 / binding 0, std140, matching the GL
+// pull layout so the same application data feeds both backends
+
+// Built-in vertex shader (248 words, 992 bytes)
+static const riU32 s_vk_triangle_vertex_spirv[] = {
+    0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000028u, 0x00000000u, 0x00020011u,
+    0x00000001u, 0x0006000Bu, 0x00000001u, 0x4C534C47u, 0x6474732Eu, 0x3035342Eu,
+    0x00000000u, 0x0003000Eu, 0x00000000u, 0x00000001u, 0x0008000Fu, 0x00000000u,
+    0x00000004u, 0x6E69616Du, 0x00000000u, 0x00000011u, 0x00000019u, 0x00000025u,
+    0x00040047u, 0x0000000Au, 0x00000006u, 0x00000010u, 0x00030047u, 0x0000000Bu,
+    0x00000003u, 0x00040048u, 0x0000000Bu, 0x00000000u, 0x00000018u, 0x00050048u,
+    0x0000000Bu, 0x00000000u, 0x00000023u, 0x00000000u, 0x00030047u, 0x0000000Du,
+    0x00000018u, 0x00040047u, 0x0000000Du, 0x00000021u, 0x00000000u, 0x00040047u,
+    0x0000000Du, 0x00000022u, 0x00000000u, 0x00040047u, 0x00000011u, 0x0000000Bu,
+    0x0000002Au, 0x00040047u, 0x00000019u, 0x0000001Eu, 0x00000000u, 0x00030047u,
+    0x00000023u, 0x00000002u, 0x00050048u, 0x00000023u, 0x00000000u, 0x0000000Bu,
+    0x00000000u, 0x00050048u, 0x00000023u, 0x00000001u, 0x0000000Bu, 0x00000001u,
+    0x00050048u, 0x00000023u, 0x00000002u, 0x0000000Bu, 0x00000003u, 0x00050048u,
+    0x00000023u, 0x00000003u, 0x0000000Bu, 0x00000004u, 0x00020013u, 0x00000002u,
+    0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u,
+    0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u, 0x00000008u,
+    0x00000007u, 0x00000007u, 0x0003001Du, 0x0000000Au, 0x00000007u, 0x0003001Eu,
+    0x0000000Bu, 0x0000000Au, 0x00040020u, 0x0000000Cu, 0x00000002u, 0x0000000Bu,
+    0x0004003Bu, 0x0000000Cu, 0x0000000Du, 0x00000002u, 0x00040015u, 0x0000000Eu,
+    0x00000020u, 0x00000001u, 0x0004002Bu, 0x0000000Eu, 0x0000000Fu, 0x00000000u,
+    0x00040020u, 0x00000010u, 0x00000001u, 0x0000000Eu, 0x0004003Bu, 0x00000010u,
+    0x00000011u, 0x00000001u, 0x0004002Bu, 0x0000000Eu, 0x00000013u, 0x00000002u,
+    0x00040020u, 0x00000015u, 0x00000002u, 0x00000007u, 0x00040020u, 0x00000018u,
+    0x00000003u, 0x00000007u, 0x0004003Bu, 0x00000018u, 0x00000019u, 0x00000003u,
+    0x0004002Bu, 0x0000000Eu, 0x0000001Cu, 0x00000001u, 0x00040015u, 0x00000020u,
+    0x00000020u, 0x00000000u, 0x0004002Bu, 0x00000020u, 0x00000021u, 0x00000001u,
+    0x0004001Cu, 0x00000022u, 0x00000006u, 0x00000021u, 0x0006001Eu, 0x00000023u,
+    0x00000007u, 0x00000006u, 0x00000022u, 0x00000022u, 0x00040020u, 0x00000024u,
+    0x00000003u, 0x00000023u, 0x0004003Bu, 0x00000024u, 0x00000025u, 0x00000003u,
+    0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200F8u,
+    0x00000005u, 0x0004003Bu, 0x00000008u, 0x00000009u, 0x00000007u, 0x0004003Du,
+    0x0000000Eu, 0x00000012u, 0x00000011u, 0x00050084u, 0x0000000Eu, 0x00000014u,
+    0x00000012u, 0x00000013u, 0x00060041u, 0x00000015u, 0x00000016u, 0x0000000Du,
+    0x0000000Fu, 0x00000014u, 0x0004003Du, 0x00000007u, 0x00000017u, 0x00000016u,
+    0x0003003Eu, 0x00000009u, 0x00000017u, 0x0004003Du, 0x0000000Eu, 0x0000001Au,
+    0x00000011u, 0x00050084u, 0x0000000Eu, 0x0000001Bu, 0x0000001Au, 0x00000013u,
+    0x00050080u, 0x0000000Eu, 0x0000001Du, 0x0000001Bu, 0x0000001Cu, 0x00060041u,
+    0x00000015u, 0x0000001Eu, 0x0000000Du, 0x0000000Fu, 0x0000001Du, 0x0004003Du,
+    0x00000007u, 0x0000001Fu, 0x0000001Eu, 0x0003003Eu, 0x00000019u, 0x0000001Fu,
+    0x0004003Du, 0x00000007u, 0x00000026u, 0x00000009u, 0x00050041u, 0x00000018u,
+    0x00000027u, 0x00000025u, 0x0000000Fu, 0x0003003Eu, 0x00000027u, 0x00000026u,
+    0x000100FDu, 0x00010038u,
+};
+
+// Built-in fragment shader (78 words, 312 bytes)
+static const riU32 s_vk_triangle_fragment_spirv[] = {
+    0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000000Du, 0x00000000u, 0x00020011u,
+    0x00000001u, 0x0006000Bu, 0x00000001u, 0x4C534C47u, 0x6474732Eu, 0x3035342Eu,
+    0x00000000u, 0x0003000Eu, 0x00000000u, 0x00000001u, 0x0007000Fu, 0x00000004u,
+    0x00000004u, 0x6E69616Du, 0x00000000u, 0x00000009u, 0x0000000Bu, 0x00030010u,
+    0x00000004u, 0x00000007u, 0x00040047u, 0x00000009u, 0x0000001Eu, 0x00000000u,
+    0x00040047u, 0x0000000Bu, 0x0000001Eu, 0x00000000u, 0x00020013u, 0x00000002u,
+    0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u,
+    0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u, 0x00000008u,
+    0x00000003u, 0x00000007u, 0x0004003Bu, 0x00000008u, 0x00000009u, 0x00000003u,
+    0x00040020u, 0x0000000Au, 0x00000001u, 0x00000007u, 0x0004003Bu, 0x0000000Au,
+    0x0000000Bu, 0x00000001u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
+    0x00000003u, 0x000200F8u, 0x00000005u, 0x0004003Du, 0x00000007u, 0x0000000Cu,
+    0x0000000Bu, 0x0003003Eu, 0x00000009u, 0x0000000Cu, 0x000100FDu, 0x00010038u,
+};
+
+//----------------------------------------------------------------------------------
 // Vulkan Loader and Headers
 //----------------------------------------------------------------------------------
 // NOTE: rhio loads Vulkan through volk at runtime; the loader library is never
@@ -5046,6 +5137,7 @@ typedef struct riVK_Device
     riU32                      surfaceExtensions;  // riVK_SurfaceExtensionBits enabled at init
     riU32                      maxApiVersion;      // Clamped instance API version
     riU32                      fillModeNonSolid;   // Wireframe rasterization supported
+    riU32                      storageBufferOffsetAlignment; // Min SSBO bind offset alignment
     VkPhysicalDeviceProperties properties;         // Device metadata for logs and limits
 
 } riVK_Device;
@@ -5065,6 +5157,7 @@ typedef struct riVK_Buffer
 typedef struct riVK_RenderPipeline
 {
     riRenderPipelineBase base;           // Frontend handle dispatch
+    riVK_Device *        device;         // Owning device state
     riRenderPipelineInfo info;           // Normalized metadata
     VkPipeline           pipeline;       // Graphics pipeline over the builtin shaders
     VkPipelineLayout     layout;         // Pipeline layout over shaderBufferLayout
@@ -5087,6 +5180,7 @@ typedef struct riVK_Texture
     VkImage       image;            // Native image, VK_NULL_HANDLE for facades
     bool          isSwapchainImage; // Texture wraps a swapchain image
     struct riVK_Swapchain * swapchain; // Owning swapchain for facade textures
+    riU32         imageIndex;       // Swapchain image slot when isSwapchainImage
 
 } riVK_Texture;
 
@@ -5168,6 +5262,7 @@ typedef struct riVK_Swapchain
     riVK_SwapchainState state;            // Acquire/present lifetime state
     riVK_Texture        textures[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Facade textures (inline)
     VkImageView         imageViews[RHIO_VK_MAX_SWAPCHAIN_IMAGES];
+    VkImageLayout       imageLayouts[RHIO_VK_MAX_SWAPCHAIN_IMAGES]; // Tracked layout per image
     VkSemaphore         imageAvailable[RHIO_VK_MAX_FRAMES_IN_FLIGHT];
     // NOTE: One render-finished semaphore per swapchain image, not per frame
     // slot: acquire only returns images whose previous presentation consumed
@@ -5259,16 +5354,45 @@ static void     _rhioVK_destroy_swapchain_object( riVK_Swapchain * vkSwapchain )
 static void _rhioVK_destroy_texture_noop( riTexture texture );
 static void _rhioVK_get_texture_info( riTexture texture, riTextureInfo * outInfo );
 
+// Texture views (borrow swapchain image views)
+static riStatus _rhioVK_create_texture_view( riDevice device, const riTextureViewInfo * info,
+                                             riTextureView * outTextureView );
+static void     _rhioVK_destroy_texture_view( riTextureView textureView );
+static void     _rhioVK_get_texture_view_info( riTextureView textureView, riTextureViewInfo * outInfo );
+
+// Render pipelines
+static riStatus _rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info,
+                                                riRenderPipeline * outPipeline );
+static void     _rhioVK_destroy_render_pipeline( riRenderPipeline pipeline );
+static void     _rhioVK_get_render_pipeline_info( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo );
+
+// Pipeline internals
+static riStatus _rhioVK_validate_render_pipeline_info( riVK_Device * vkDevice, const riRenderPipelineInfo * info );
+static riStatus _rhioVK_create_shader_module( riVK_Device * vkDevice, const riU32 * words, riU32 wordCount,
+                                              VkShaderModule * outModule );
+
+// Render pass
+static riStatus _rhioVK_render_pass_end( riRenderPass renderPass );
+static riStatus _rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipeline );
+static riStatus _rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBuffer buffer,
+                                                       riU32 offset );
+static riStatus _rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width,
+                                                  riU32 height );
+static riStatus _rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount,
+                                          riU32 firstVertex, riU32 firstInstance );
+
 //----------------------------------------------------------------------------------
 // Vulkan Backend Vtable
 //----------------------------------------------------------------------------------
 
 static const riDeviceVTable s_vk_vtable = {
-    .init                 = _rhioVK_init,
-    .shutdown             = _rhioVK_shutdown,
-    .create_command_queue = _rhioVK_create_command_queue,
-    .create_swapchain     = _rhioVK_create_swapchain,
-    .create_buffer        = _rhioVK_create_buffer,
+    .init                  = _rhioVK_init,
+    .shutdown              = _rhioVK_shutdown,
+    .create_command_queue  = _rhioVK_create_command_queue,
+    .create_swapchain      = _rhioVK_create_swapchain,
+    .create_texture_view   = _rhioVK_create_texture_view,
+    .create_buffer         = _rhioVK_create_buffer,
+    .create_render_pipeline = _rhioVK_create_render_pipeline,
 };
 
 static const riCommandQueueVTable s_vk_command_queue_vtable = {
@@ -5300,6 +5424,24 @@ static const riSwapchainVTable s_vk_swapchain_vtable = {
 static const riTextureVTable s_vk_texture_vtable = {
     .destroy_texture  = _rhioVK_destroy_texture_noop,
     .get_texture_info = _rhioVK_get_texture_info,
+};
+
+static const riTextureViewVTable s_vk_texture_view_vtable = {
+    .destroy_texture_view  = _rhioVK_destroy_texture_view,
+    .get_texture_view_info = _rhioVK_get_texture_view_info,
+};
+
+static const riRenderPipelineVTable s_vk_render_pipeline_vtable = {
+    .destroy_render_pipeline  = _rhioVK_destroy_render_pipeline,
+    .get_render_pipeline_info = _rhioVK_get_render_pipeline_info,
+};
+
+static const riRenderPassVTable s_vk_render_pass_vtable = {
+    .end               = _rhioVK_render_pass_end,
+    .set_pipeline      = _rhioVK_render_pass_set_pipeline,
+    .set_shader_buffer = _rhioVK_render_pass_set_shader_buffer,
+    .set_viewport      = _rhioVK_render_pass_set_viewport,
+    .draw              = _rhioVK_render_pass_draw,
 };
 
 //----------------------------------------------------------------------------------
@@ -5682,6 +5824,10 @@ _rhioVK_create_logical( riVK_Device * vkDevice )
     VkCommandBufferAllocateInfo         bufferInfo    = RI_ZERO_INIT;
 
     RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Offset Alignment
+    //----------------------------------------------------------
+    vkDevice->storageBufferOffsetAlignment = vkDevice->properties.limits.minStorageBufferOffsetAlignment;
 
     // Queue Family Selection
     //----------------------------------------------------------
@@ -6124,20 +6270,6 @@ _rhioVK_command_list_reset( riCommandList commandList )
     return RI_SUCCESS;
 }
 
-// Begin a render pass over the acquired swapchain image
-// NOTE: Real recording lands with the dynamic-rendering milestone
-static riStatus
-_rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info, riRenderPass * outRenderPass )
-{
-    UNUSED( commandList );
-    UNUSED( info );
-    UNUSED( outRenderPass );
-
-    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Render passes are not implemented yet" );
-
-    return RI_ERROR_BACKEND_UNAVAIL;
-}
-
 //----------------------------------------------------------------------------------
 // Vulkan Submission
 //----------------------------------------------------------------------------------
@@ -6198,6 +6330,19 @@ _rhioVK_submit_command_lists( riCommandQueue queue, const riCommandQueueSubmitIn
         {
             TRACELOG( RI_LOG_ERROR, "BACKEND VK: No acquired swapchain frame; call rhioSwapchainGetCurrentTexture first" );
             return RI_ERROR_INVALID_STATE;
+        }
+
+    // Recorded Target Check
+    //----------------------------------------------------------
+    for( i = 0u; i < info->commandListCount; ++i )
+        {
+            vkList = (riVK_CommandList *)info->commandLists[i];
+            if( vkList->target != NULL && vkList->target != vkSwapchain )
+                {
+                    TRACELOG( RI_LOG_ERROR,
+                              "BACKEND VK: Command list was recorded against a different swapchain" );
+                    return RI_ERROR_INVALID_STATE;
+                }
         }
 
     // Queue Submission (sync2)
@@ -6864,6 +7009,7 @@ _rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain )
                 }
 
             memset( &vkSwapchain->textures[i], 0, sizeof( riVK_Texture ) );
+            vkSwapchain->imageLayouts[i] = VK_IMAGE_LAYOUT_UNDEFINED;
         }
 
     vkSwapchain->imageCount = imageCount;
@@ -6907,6 +7053,8 @@ _rhioVK_create_swapchain_object( riVK_Swapchain * vkSwapchain )
             vkSwapchain->textures[i].info.name       = "swapchain image";
             vkSwapchain->textures[i].info.format     = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
             (void)_rhioVK_format_from_vk( vkSwapchain->format, &vkSwapchain->textures[i].info.format );
+            vkSwapchain->textures[i].imageIndex      = i;
+            vkSwapchain->imageLayouts[i]             = VK_IMAGE_LAYOUT_UNDEFINED;
         }
 
     vkSwapchain->state = RI_VK_SWAPCHAIN_STATE_IDLE;
@@ -7366,6 +7514,925 @@ _rhioVK_get_texture_info( riTexture texture, riTextureInfo * outInfo )
         {
             *outInfo = vkTexture->info;
         }
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Render Pipeline Implementation
+//----------------------------------------------------------------------------------
+
+// Validate the pipeline creation info against backend capabilities
+static riStatus
+_rhioVK_validate_render_pipeline_info( riVK_Device * vkDevice, const riRenderPipelineInfo * info )
+{
+    VkPrimitiveTopology topologyVk = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+    VkPolygonMode       fillVk     = VK_POLYGON_MODE_MAX_ENUM;
+    VkCullModeFlags     cullVk     = 0u;
+    VkFrontFace         faceVk     = VK_FRONT_FACE_MAX_ENUM;
+    VkCompareOp         compareVk  = VK_COMPARE_OP_MAX_ENUM;
+    VkBlendFactor       factorVk   = VK_BLEND_FACTOR_MAX_ENUM;
+    VkBlendOp           blendVk    = VK_BLEND_OP_MAX_ENUM;
+    VkFormat            formatVk   = VK_FORMAT_UNDEFINED;
+    riU32               i          = 0u;
+    riStatus            status     = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->supportsIndirectCommands <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->depthClampEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->stencilTestEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->stencilWriteEnable <= 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderTargetCount <= RHIO_MAX_COLOR_ATTACHMENTS, RI_ERROR_INVALID_PARAM );
+
+    // Builtin Shaders Only
+    //----------------------------------------------------------
+    RI_GUARD( info->supportsIndirectCommands == 0u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->vertexShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->fragmentShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->meshShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( info->taskShader == NULL, RI_ERROR_BACKEND_UNAVAIL );
+
+    // Stencil
+    //----------------------------------------------------------
+    // Deferred with the depth-stencil attachment milestone
+    if( info->stencilTestEnable != 0u || info->stencilWriteEnable != 0u )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Stencil pipeline state is not supported yet" );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Rasterizer Conversions
+    //----------------------------------------------------------
+    TRY_CONVERT( _rhioVK_topology_to_vk, info->topology, &topologyVk );
+    TRY_CONVERT( _rhioVK_cull_mode_to_vk, info->cullMode, &cullVk );
+    TRY_CONVERT( _rhioVK_front_face_to_vk, info->frontFace, &faceVk );
+    TRY_CONVERT( _rhioVK_compare_operation_to_vk, info->depthCompareOp, &compareVk );
+    TRY_CONVERT( _rhioVK_compare_operation_to_vk, info->stencilCompareOp, &compareVk );
+
+    switch( info->fillMode )
+        {
+        case RI_PIPELINE_FILL_MODE_SOLID: break;
+        case RI_PIPELINE_FILL_MODE_WIREFRAME:
+            if( vkDevice->fillModeNonSolid == 0u )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Wireframe rasterization is unsupported on this device" );
+                    return RI_ERROR_BACKEND_UNAVAIL;
+                }
+            break;
+        default: return RI_ERROR_INVALID_PARAM;
+        }
+
+    // Color Target Formats
+    //----------------------------------------------------------
+    for( i = 0u; i < info->renderTargetCount; ++i )
+        {
+            TRY_CONVERT( _rhioVK_format_to_vk, info->renderTargetFormats[i], &formatVk );
+        }
+
+    if( info->depthTestEnable != 0u )
+        {
+            TRY_CONVERT( _rhioVK_format_to_vk, info->depthStencilFormat, &formatVk );
+        }
+
+    // Blend State
+    //----------------------------------------------------------
+    for( i = 0u; i < info->renderTargetCount; ++i )
+        {
+            RI_GUARD( info->blendEnable[i] <= 1u, RI_ERROR_INVALID_PARAM );
+
+            if( info->blendEnable[i] == 0u ) continue;
+
+            TRY_CONVERT( _rhioVK_blend_factor_to_vk, info->blendSrcRgbFactor[i], &factorVk );
+            TRY_CONVERT( _rhioVK_blend_factor_to_vk, info->blendDstRgbFactor[i], &factorVk );
+            TRY_CONVERT( _rhioVK_blend_operation_to_vk, info->blendRgbOp[i], &blendVk );
+            TRY_CONVERT( _rhioVK_blend_factor_to_vk, info->blendSrcAlphaFactor[i], &factorVk );
+            TRY_CONVERT( _rhioVK_blend_factor_to_vk, info->blendDstAlphaFactor[i], &factorVk );
+            TRY_CONVERT( _rhioVK_blend_operation_to_vk, info->blendAlphaOp[i], &blendVk );
+        }
+
+    return RI_SUCCESS;
+}
+
+// Compile one SPIR-V blob into a shader module
+static riStatus
+_rhioVK_create_shader_module( riVK_Device * vkDevice, const riU32 * words, riU32 wordCount,
+                              VkShaderModule * outModule )
+{
+    VkShaderModuleCreateInfo createInfo = RI_ZERO_INIT;
+    VkResult                 result     = VK_SUCCESS;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( words != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outModule != NULL, RI_ERROR_INVALID_PARAM );
+
+    createInfo.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = (riSize)wordCount * sizeof( riU32 );
+    createInfo.pCode    = words;
+
+    result = vkCreateShaderModule( vkDevice->device, &createInfo, NULL, outModule );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateShaderModule failed (%d)", (int)result );
+            return RI_ERROR_SHADER_COMPILE;
+        }
+
+    return RI_SUCCESS;
+}
+
+// Create the builtin triangle pipeline over the embedded SPIR-V blobs
+static riStatus
+_rhioVK_create_render_pipeline( riDevice device, const riRenderPipelineInfo * info, riRenderPipeline * outPipeline )
+{
+    riVK_Device *                       vkDevice    = (riVK_Device *)device;
+    riVK_RenderPipeline *               vkPipeline  = NULL;
+    riRenderPipelineInfo                normalized  = RI_ZERO_INIT;
+    VkPipelineLayoutCreateInfo          layoutInfo  = RI_ZERO_INIT;
+    VkPipelineShaderStageCreateInfo     stages[2];
+    VkPipelineVertexInputStateCreateInfo vertexInput = RI_ZERO_INIT;
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = RI_ZERO_INIT;
+    VkPipelineViewportStateCreateInfo   viewportState = RI_ZERO_INIT;
+    VkPipelineRasterizationStateCreateInfo rasterizer = RI_ZERO_INIT;
+    VkPipelineMultisampleStateCreateInfo multisampling = RI_ZERO_INIT;
+    VkPipelineDepthStencilStateCreateInfo depthStencil = RI_ZERO_INIT;
+    VkPipelineColorBlendAttachmentState blendAttachments[RHIO_MAX_COLOR_ATTACHMENTS];
+    VkPipelineColorBlendStateCreateInfo colorBlend  = RI_ZERO_INIT;
+    VkDynamicState                      dynamicStates[2];
+    VkPipelineDynamicStateCreateInfo    dynamicState = RI_ZERO_INIT;
+    VkFormat                            colorFormats[RHIO_MAX_COLOR_ATTACHMENTS];
+    VkPipelineRenderingCreateInfo       renderingInfo = RI_ZERO_INIT;
+    VkGraphicsPipelineCreateInfo        pipelineInfo  = RI_ZERO_INIT;
+    VkResult                            result        = VK_SUCCESS;
+    riU32                               i             = 0u;
+    riStatus                            status        = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outPipeline != NULL, RI_ERROR_INVALID_PARAM );
+
+    status = _rhioVK_validate_render_pipeline_info( vkDevice, info );
+    if( RI_FAILED( status ) ) return status;
+
+    // Info Normalization
+    //----------------------------------------------------------
+    normalized = *info;
+    if( normalized.renderTargetCount == 0u )
+        {
+            normalized.renderTargetCount      = 1u;
+            normalized.renderTargetFormats[0] = RHIO_TEXTURE_FORMAT_R8G8B8A8_UNORM;
+        }
+
+    for( i = 0u; i < normalized.renderTargetCount; ++i )
+        {
+            colorFormats[i] = VK_FORMAT_R8G8B8A8_UNORM;
+            (void)_rhioVK_format_to_vk( normalized.renderTargetFormats[i], &colorFormats[i] );
+
+            memset( &blendAttachments[i], 0, sizeof( blendAttachments[i] ) );
+            blendAttachments[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                                                 | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            blendAttachments[i].blendEnable         = normalized.blendEnable[i] != 0u ? VK_TRUE : VK_FALSE;
+            blendAttachments[i].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            blendAttachments[i].dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+            blendAttachments[i].colorBlendOp        = VK_BLEND_OP_ADD;
+            blendAttachments[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            blendAttachments[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            blendAttachments[i].alphaBlendOp        = VK_BLEND_OP_ADD;
+
+            if( normalized.blendEnable[i] != 0u )
+                {
+                    (void)_rhioVK_blend_factor_to_vk( normalized.blendSrcRgbFactor[i],
+                                                      &blendAttachments[i].srcColorBlendFactor );
+                    (void)_rhioVK_blend_factor_to_vk( normalized.blendDstRgbFactor[i],
+                                                      &blendAttachments[i].dstColorBlendFactor );
+                    (void)_rhioVK_blend_operation_to_vk( normalized.blendRgbOp[i],
+                                                         &blendAttachments[i].colorBlendOp );
+                    (void)_rhioVK_blend_factor_to_vk( normalized.blendSrcAlphaFactor[i],
+                                                      &blendAttachments[i].srcAlphaBlendFactor );
+                    (void)_rhioVK_blend_factor_to_vk( normalized.blendDstAlphaFactor[i],
+                                                      &blendAttachments[i].dstAlphaBlendFactor );
+                    (void)_rhioVK_blend_operation_to_vk( normalized.blendAlphaOp[i],
+                                                         &blendAttachments[i].alphaBlendOp );
+                }
+        }
+
+    // Pipeline Allocation
+    //----------------------------------------------------------
+    vkPipeline = (riVK_RenderPipeline *)RI_CALLOC( 1, sizeof( *vkPipeline ) );
+    if( RI_UNLIKELY( vkPipeline == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    // Shader Modules
+    //----------------------------------------------------------
+    status = _rhioVK_create_shader_module( vkDevice, s_vk_triangle_vertex_spirv,
+                                           (riU32)( sizeof( s_vk_triangle_vertex_spirv ) / sizeof( riU32 ) ),
+                                           &vkPipeline->vertexModule );
+    if( RI_FAILED( status ) )
+        {
+            RI_FREE( vkPipeline );
+            return status;
+        }
+
+    status = _rhioVK_create_shader_module( vkDevice, s_vk_triangle_fragment_spirv,
+                                           (riU32)( sizeof( s_vk_triangle_fragment_spirv ) / sizeof( riU32 ) ),
+                                           &vkPipeline->fragmentModule );
+    if( RI_FAILED( status ) )
+        {
+            vkDestroyShaderModule( vkDevice->device, vkPipeline->vertexModule, NULL );
+            RI_FREE( vkPipeline );
+            return status;
+        }
+
+    // Pipeline Layout
+    //----------------------------------------------------------
+    layoutInfo.sType        = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1u;
+    layoutInfo.pSetLayouts  = &vkDevice->shaderBufferLayout;
+
+    result = vkCreatePipelineLayout( vkDevice->device, &layoutInfo, NULL, &vkPipeline->layout );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreatePipelineLayout failed (%d)", (int)result );
+            vkDestroyShaderModule( vkDevice->device, vkPipeline->vertexModule, NULL );
+            vkDestroyShaderModule( vkDevice->device, vkPipeline->fragmentModule, NULL );
+            RI_FREE( vkPipeline );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Shader Stages
+    //----------------------------------------------------------
+    memset( &stages[0], 0, sizeof( stages[0] ) );
+    memset( &stages[1], 0, sizeof( stages[1] ) );
+
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vkPipeline->vertexModule;
+    stages[0].pName  = "main";
+
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = vkPipeline->fragmentModule;
+    stages[1].pName  = "main";
+
+    // Fixed-Function State
+    //----------------------------------------------------------
+    // Vertex input stays empty: the builtin shader pulls vertices from the
+    // shader buffer bound at set 0 / binding 0
+    vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    (void)_rhioVK_topology_to_vk( normalized.topology, &inputAssembly.topology );
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+
+    viewportState.sType      = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1u;
+    viewportState.scissorCount  = 1u;
+
+    (void)_rhioVK_fill_mode_to_vk( normalized.fillMode, &rasterizer.polygonMode );
+    (void)_rhioVK_cull_mode_to_vk( normalized.cullMode, &rasterizer.cullMode );
+    (void)_rhioVK_front_face_to_vk( normalized.frontFace, &rasterizer.frontFace );
+    rasterizer.sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.lineWidth        = 1.0f;
+    rasterizer.depthClampEnable = normalized.depthClampEnable != 0u ? VK_TRUE : VK_FALSE;
+    // NOTE: The flipped (negative-height) viewport mirrors window-space
+    //       winding, so the front face is inverted to keep GL semantics
+    rasterizer.frontFace        = rasterizer.frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE
+                                      ? VK_FRONT_FACE_CLOCKWISE
+                                      : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+    multisampling.sType               = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    depthStencil.sType          = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable  = normalized.depthTestEnable != 0u ? VK_TRUE : VK_FALSE;
+    depthStencil.depthWriteEnable = normalized.depthWriteEnable != 0u ? VK_TRUE : VK_FALSE;
+    (void)_rhioVK_compare_operation_to_vk( normalized.depthCompareOp, &depthStencil.depthCompareOp );
+
+    colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.logicOpEnable   = VK_FALSE;
+    colorBlend.attachmentCount = normalized.renderTargetCount;
+    colorBlend.pAttachments    = blendAttachments;
+
+    dynamicStates[0] = VK_DYNAMIC_STATE_VIEWPORT;
+    dynamicStates[1] = VK_DYNAMIC_STATE_SCISSOR;
+
+    dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2u;
+    dynamicState.pDynamicStates    = dynamicStates;
+
+    // Dynamic Rendering Compatibility
+    //----------------------------------------------------------
+    renderingInfo.sType                = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingInfo.colorAttachmentCount = normalized.renderTargetCount;
+    renderingInfo.pColorAttachmentFormats = colorFormats;
+    if( normalized.depthTestEnable != 0u )
+        {
+            (void)_rhioVK_format_to_vk( normalized.depthStencilFormat, &renderingInfo.depthAttachmentFormat );
+        }
+
+    // Graphics Pipeline
+    //----------------------------------------------------------
+    pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext               = &renderingInfo;
+    pipelineInfo.stageCount          = 2u;
+    pipelineInfo.pStages             = stages;
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
+    pipelineInfo.pColorBlendState    = &colorBlend;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = vkPipeline->layout;
+    pipelineInfo.renderPass          = VK_NULL_HANDLE;
+    pipelineInfo.subpass             = 0u;
+
+    result = vkCreateGraphicsPipelines( vkDevice->device, VK_NULL_HANDLE, 1u, &pipelineInfo, NULL,
+                                        &vkPipeline->pipeline );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkCreateGraphicsPipelines failed (%d)", (int)result );
+            vkDestroyPipelineLayout( vkDevice->device, vkPipeline->layout, NULL );
+            vkDestroyShaderModule( vkDevice->device, vkPipeline->vertexModule, NULL );
+            vkDestroyShaderModule( vkDevice->device, vkPipeline->fragmentModule, NULL );
+            RI_FREE( vkPipeline );
+            return RI_ERROR_BACKEND_INIT;
+        }
+
+    // Pipeline Dispatch Initialization
+    //----------------------------------------------------------
+    vkPipeline->base.vtable = &s_vk_render_pipeline_vtable;
+    vkPipeline->device      = vkDevice;
+    vkPipeline->info        = normalized;
+
+    _rhioVK_set_object_name( vkDevice, VK_OBJECT_TYPE_PIPELINE, (riU64)vkPipeline->pipeline, info->name );
+
+    // Pipeline Handle Handoff
+    //----------------------------------------------------------
+    *outPipeline = (riRenderPipeline)vkPipeline;
+
+    return RI_SUCCESS;
+}
+
+// Destroy the Vulkan objects of a render pipeline
+static void
+_rhioVK_destroy_render_pipeline( riRenderPipeline pipeline )
+{
+    riVK_RenderPipeline * vkPipeline = (riVK_RenderPipeline *)pipeline;
+    riVK_Device *         vkDevice   = NULL;
+
+    RI_GUARD_VOID( vkPipeline != NULL );
+
+    // NOTE: The frontend frees the wrapper after this callback returns; only
+    // backend-owned Vulkan objects are released here
+    vkDevice = vkPipeline->device;
+    if( vkDevice != NULL )
+        {
+            if( vkPipeline->pipeline != VK_NULL_HANDLE )
+                {
+                    vkDestroyPipeline( vkDevice->device, vkPipeline->pipeline, NULL );
+                    vkPipeline->pipeline = VK_NULL_HANDLE;
+                }
+
+            if( vkPipeline->layout != VK_NULL_HANDLE )
+                {
+                    vkDestroyPipelineLayout( vkDevice->device, vkPipeline->layout, NULL );
+                    vkPipeline->layout = VK_NULL_HANDLE;
+                }
+
+            if( vkPipeline->vertexModule != VK_NULL_HANDLE )
+                {
+                    vkDestroyShaderModule( vkDevice->device, vkPipeline->vertexModule, NULL );
+                    vkPipeline->vertexModule = VK_NULL_HANDLE;
+                }
+
+            if( vkPipeline->fragmentModule != VK_NULL_HANDLE )
+                {
+                    vkDestroyShaderModule( vkDevice->device, vkPipeline->fragmentModule, NULL );
+                    vkPipeline->fragmentModule = VK_NULL_HANDLE;
+                }
+        }
+}
+
+// Get the normalized metadata of a render pipeline
+static void
+_rhioVK_get_render_pipeline_info( riRenderPipeline pipeline, riRenderPipelineInfo * outInfo )
+{
+    riVK_RenderPipeline * vkPipeline = (riVK_RenderPipeline *)pipeline;
+
+    if( vkPipeline != NULL && outInfo != NULL )
+        {
+            *outInfo = vkPipeline->info;
+        }
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Texture View Implementation
+//----------------------------------------------------------------------------------
+
+// Create a texture view over a swapchain facade texture
+// NOTE: Views borrow the swapchain-owned image view; no ownership is taken
+static riStatus
+_rhioVK_create_texture_view( riDevice device, const riTextureViewInfo * info, riTextureView * outTextureView )
+{
+    riVK_Device *       vkDevice  = (riVK_Device *)device;
+    riVK_Texture *      vkTexture = NULL;
+    riVK_TextureView *  vkView    = NULL;
+    riTextureViewInfo   normalized = RI_ZERO_INIT;
+    riVK_Swapchain *    vkSwapchain = NULL;
+
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outTextureView != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->texture != NULL, RI_ERROR_INVALID_PARAM );
+
+    // Facade-Only Views
+    //----------------------------------------------------------
+    vkTexture = (riVK_Texture *)info->texture;
+    if( !vkTexture->isSwapchainImage || vkTexture->swapchain == NULL )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Only swapchain texture views are supported yet" );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    vkSwapchain = vkTexture->swapchain;
+
+    // View Range
+    //----------------------------------------------------------
+    // Facades expose exactly one mip and one layer
+    RI_GUARD( info->baseMipLevel == 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->baseArrayLayer == 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->mipLevelCount == 0u || info->mipLevelCount == 1u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->arrayLayerCount == 0u || info->arrayLayerCount == 1u, RI_ERROR_INVALID_PARAM );
+    if( info->format != RHIO_TEXTURE_FORMAT_UNDEFINED
+        && info->format != vkTexture->info.format )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Texture view format does not match the swapchain format" );
+            return RI_ERROR_INVALID_PARAM;
+        }
+
+    if( info->usage != 0u
+        && RI_FLAG_CHECK( info->usage, RI_TEXTURE_USAGE_RENDER_TARGET ) == 0u )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Swapchain texture views require the RENDER_TARGET usage" );
+            return RI_ERROR_INVALID_PARAM;
+        }
+
+    // View Allocation
+    //----------------------------------------------------------
+    vkView = (riVK_TextureView *)RI_CALLOC( 1, sizeof( *vkView ) );
+    if( RI_UNLIKELY( vkView == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    normalized            = *info;
+    normalized.format     = vkTexture->info.format;
+    normalized.usage      = info->usage != 0u ? info->usage : RI_TEXTURE_USAGE_RENDER_TARGET;
+    normalized.dimensions = RI_TEXTURE_DIMENSIONS_2D;
+    normalized.mipLevelCount   = normalized.mipLevelCount != 0u ? normalized.mipLevelCount : 1u;
+    normalized.arrayLayerCount = normalized.arrayLayerCount != 0u ? normalized.arrayLayerCount : 1u;
+
+    // View Dispatch Initialization
+    //----------------------------------------------------------
+    vkView->base.vtable     = &s_vk_texture_view_vtable;
+    vkView->info            = normalized;
+    vkView->texture         = vkTexture;
+    vkView->isSwapchainView = true;
+    vkView->imageIndex      = vkTexture->imageIndex;
+    vkView->view            = vkSwapchain->imageViews[vkView->imageIndex];
+
+    // View Handle Handoff
+    //----------------------------------------------------------
+    *outTextureView = (riTextureView)vkView;
+
+    return RI_SUCCESS;
+}
+
+// Destroy a texture view; borrowed views release nothing
+static void
+_rhioVK_destroy_texture_view( riTextureView textureView )
+{
+    UNUSED( textureView );
+}
+
+// Get the normalized metadata of a texture view
+static void
+_rhioVK_get_texture_view_info( riTextureView textureView, riTextureViewInfo * outInfo )
+{
+    riVK_TextureView * vkView = (riVK_TextureView *)textureView;
+
+    if( vkView != NULL && outInfo != NULL )
+        {
+            *outInfo = vkView->info;
+        }
+}
+
+//----------------------------------------------------------------------------------
+// Vulkan Render Pass Implementation
+//----------------------------------------------------------------------------------
+
+// Begin a render pass over the acquired swapchain image
+// NOTE: Depth-stencil attachments and multiple color attachments land with a
+//       later milestone
+static riStatus
+_rhioVK_begin_render_pass( riCommandList commandList, const riRenderPassInfo * info, riRenderPass * outRenderPass )
+{
+    riVK_CommandList *          vkList        = (riVK_CommandList *)commandList;
+    riVK_RenderPass *           vkPass        = NULL;
+    const riRenderPassAttachmentInfo * attachment = NULL;
+    riVK_TextureView *          vkView        = NULL;
+    riVK_Swapchain *            vkSwapchain   = NULL;
+    VkImageMemoryBarrier2       layoutBarrier = RI_ZERO_INIT;
+    VkDependencyInfo            dependencyInfo = RI_ZERO_INIT;
+    VkRenderingAttachmentInfo   attachmentInfos[RHIO_MAX_COLOR_ATTACHMENTS];
+    VkRenderingInfo             renderingInfo = RI_ZERO_INIT;
+    riU32                       imageIndex    = 0u;
+    riU32                       i             = 0u;
+    riStatus                    status        = RI_ERROR_UNKNOWN;
+
+    RI_GUARD( vkList != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( outRenderPass != NULL, RI_ERROR_INVALID_PARAM );
+
+    RI_GUARD( vkList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkList->activeRenderPass == NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( info->colorAttachmentCount <= RHIO_MAX_COLOR_ATTACHMENTS, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderWidth > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->renderHeight > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( info->colorAttachmentCount > 0u || info->hasDepthStencilAttachment, RI_ERROR_INVALID_PARAM );
+
+    // Depth-Stencil Attachments
+    //----------------------------------------------------------
+    if( info->hasDepthStencilAttachment )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Depth-stencil attachments are not supported yet" );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    if( info->colorAttachmentCount > 1u )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: Multiple color attachments are not supported yet" );
+            return RI_ERROR_BACKEND_UNAVAIL;
+        }
+
+    // Attachment Validation
+    //----------------------------------------------------------
+    for( i = 0u; i < info->colorAttachmentCount; ++i )
+        {
+            attachment = &info->colorAttachments[i];
+
+            RI_GUARD( attachment->textureView != NULL, RI_ERROR_INVALID_PARAM );
+
+            vkView = (riVK_TextureView *)attachment->textureView;
+            if( !vkView->isSwapchainView || vkView->texture == NULL )
+                {
+                    TRACELOG( RI_LOG_ERROR, "BACKEND VK: Render pass attachments must target the acquired backbuffer" );
+                    return RI_ERROR_BACKEND_UNAVAIL;
+                }
+
+            vkSwapchain = vkView->texture->swapchain;
+            if( vkSwapchain != vkList->queue->frameTarget )
+                {
+                    TRACELOG( RI_LOG_ERROR,
+                              "BACKEND VK: Render pass targets a swapchain that is not the acquired frame" );
+                    return RI_ERROR_INVALID_STATE;
+                }
+        }
+
+    imageIndex = vkView->imageIndex;
+
+    // Layout Transition
+    //----------------------------------------------------------
+    // The backbuffer moves into COLOR_ATTACHMENT_OPTIMAL for the pass
+    layoutBarrier.sType              = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    layoutBarrier.srcStageMask       = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    layoutBarrier.srcAccessMask      = 0u;
+    layoutBarrier.dstStageMask       = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    layoutBarrier.dstAccessMask      = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    layoutBarrier.oldLayout          = vkSwapchain->imageLayouts[imageIndex];
+    layoutBarrier.newLayout          = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    layoutBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    layoutBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    layoutBarrier.image              = vkSwapchain->textures[imageIndex].image;
+    layoutBarrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    layoutBarrier.subresourceRange.baseMipLevel   = 0u;
+    layoutBarrier.subresourceRange.levelCount     = 1u;
+    layoutBarrier.subresourceRange.baseArrayLayer = 0u;
+    layoutBarrier.subresourceRange.layerCount     = 1u;
+
+    dependencyInfo.sType                 = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.imageMemoryBarrierCount = 1u;
+    dependencyInfo.pImageMemoryBarriers  = &layoutBarrier;
+
+    vkCmdPipelineBarrier2( vkList->commandBuffer, &dependencyInfo );
+
+    // Attachment Recording
+    //----------------------------------------------------------
+    for( i = 0u; i < info->colorAttachmentCount; ++i )
+        {
+            attachment = &info->colorAttachments[i];
+
+            memset( &attachmentInfos[i], 0, sizeof( attachmentInfos[i] ) );
+
+            attachmentInfos[i].sType      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            attachmentInfos[i].imageView  = vkView->view;
+            attachmentInfos[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            (void)_rhioVK_load_action_to_vk( attachment->loadAction, &attachmentInfos[i].loadOp );
+            (void)_rhioVK_store_action_to_vk( attachment->storeAction, &attachmentInfos[i].storeOp );
+            attachmentInfos[i].clearValue.color.float32[0] = attachment->clearColor[0];
+            attachmentInfos[i].clearValue.color.float32[1] = attachment->clearColor[1];
+            attachmentInfos[i].clearValue.color.float32[2] = attachment->clearColor[2];
+            attachmentInfos[i].clearValue.color.float32[3] = attachment->clearColor[3];
+        }
+
+    // Render Pass Allocation
+    //----------------------------------------------------------
+    vkPass = (riVK_RenderPass *)RI_CALLOC( 1, sizeof( *vkPass ) );
+    if( RI_UNLIKELY( vkPass == NULL ) )
+        {
+            return RI_ERROR_OUT_OF_MEMORY;
+        }
+
+    vkPass->base.vtable     = &s_vk_render_pass_vtable;
+    vkPass->commandList     = vkList;
+    vkPass->targetWidth     = vkSwapchain->extent.width;
+    vkPass->targetHeight    = vkSwapchain->extent.height;
+
+    // Dynamic Rendering Begin
+    //----------------------------------------------------------
+    renderingInfo.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    renderingInfo.renderArea.offset.x = 0u;
+    renderingInfo.renderArea.offset.y = 0u;
+    renderingInfo.renderArea.extent    = vkSwapchain->extent;
+    renderingInfo.layerCount         = 1u;
+    renderingInfo.colorAttachmentCount = info->colorAttachmentCount;
+    renderingInfo.pColorAttachments  = attachmentInfos;
+
+    vkCmdBeginRendering( vkList->commandBuffer, &renderingInfo );
+
+    // Pass Dispatch Initialization
+    //----------------------------------------------------------
+    vkList->activeRenderPass = vkPass;
+    vkList->target           = vkSwapchain;
+    vkSwapchain->imageLayouts[imageIndex] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // Render Pass Handle Handoff
+    //----------------------------------------------------------
+    *outRenderPass = (riRenderPass)vkPass;
+
+    return RI_SUCCESS;
+}
+
+// Finish the open render pass and release the pass wrapper
+static riStatus
+_rhioVK_render_pass_end( riRenderPass renderPass )
+{
+    riVK_RenderPass *    vkPass        = (riVK_RenderPass *)renderPass;
+    riVK_CommandList *   vkList        = NULL;
+    riVK_Swapchain *     vkSwapchain   = NULL;
+    VkImageMemoryBarrier2 layoutBarrier = RI_ZERO_INIT;
+    VkDependencyInfo     dependencyInfo = RI_ZERO_INIT;
+    riU32                imageIndex    = 0u;
+
+    RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+
+    vkList = vkPass->commandList;
+
+    // Dynamic Rendering End
+    //----------------------------------------------------------
+    vkCmdEndRendering( vkList->commandBuffer );
+
+    // Layout Transition
+    //----------------------------------------------------------
+    // The backbuffer moves to PRESENT_SRC so the queue can present it
+    if( vkList->target != NULL )
+        {
+            vkSwapchain = vkList->target;
+            imageIndex  = vkSwapchain->imageIndex;
+
+            layoutBarrier.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            layoutBarrier.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            layoutBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            layoutBarrier.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            layoutBarrier.dstAccessMask = 0u;
+            layoutBarrier.oldLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            layoutBarrier.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            layoutBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            layoutBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            layoutBarrier.image         = vkSwapchain->textures[imageIndex].image;
+            layoutBarrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            layoutBarrier.subresourceRange.baseMipLevel   = 0u;
+            layoutBarrier.subresourceRange.levelCount     = 1u;
+            layoutBarrier.subresourceRange.baseArrayLayer = 0u;
+            layoutBarrier.subresourceRange.layerCount     = 1u;
+
+            dependencyInfo.sType                 = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependencyInfo.imageMemoryBarrierCount = 1u;
+            dependencyInfo.pImageMemoryBarriers  = &layoutBarrier;
+
+            vkCmdPipelineBarrier2( vkList->commandBuffer, &dependencyInfo );
+
+            vkSwapchain->imageLayouts[imageIndex] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        }
+
+    // Pass Teardown
+    //----------------------------------------------------------
+    // The frontend does not free render passes; the backend owns the wrapper
+    vkList->activeRenderPass = NULL;
+    vkPass->ended            = true;
+
+    RI_FREE( vkPass );
+
+    return RI_SUCCESS;
+}
+
+// Record a render pipeline bind with default viewport and scissor
+static riStatus
+_rhioVK_render_pass_set_pipeline( riRenderPass renderPass, riRenderPipeline pipeline )
+{
+    riVK_RenderPass *    vkPass     = (riVK_RenderPass *)renderPass;
+    riVK_RenderPipeline * vkPipeline = (riVK_RenderPipeline *)pipeline;
+    VkViewport           viewport   = RI_ZERO_INIT;
+    VkRect2D             scissor    = RI_ZERO_INIT;
+
+    RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkPipeline != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+
+    // Pipeline Bind
+    //----------------------------------------------------------
+    vkPass->boundPipeline = vkPipeline;
+
+    vkCmdBindPipeline( vkPass->commandList->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                       vkPipeline->pipeline );
+
+    // Default Viewport and Scissor
+    //----------------------------------------------------------
+    // GL orientation: origin top-left, negative-height viewport flip
+    viewport.x        = 0.0f;
+    viewport.y        = (float)vkPass->targetHeight;
+    viewport.width    = (float)vkPass->targetWidth;
+    viewport.height   = -(float)vkPass->targetHeight;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    scissor.offset.x      = 0;
+    scissor.offset.y      = 0;
+    scissor.extent.width  = vkPass->targetWidth;
+    scissor.extent.height = vkPass->targetHeight;
+
+    vkCmdSetViewport( vkPass->commandList->commandBuffer, 0u, 1u, &viewport );
+    vkCmdSetScissor( vkPass->commandList->commandBuffer, 0u, 1u, &scissor );
+
+    vkPass->scissorSet = true;
+
+    return RI_SUCCESS;
+}
+
+// Record a shader buffer bind on set 0 / binding 0
+// NOTE: Only slot 0 exists in the builtin shader; more slots land with the
+//       shader-buffer layout milestone
+static riStatus
+_rhioVK_render_pass_set_shader_buffer( riRenderPass renderPass, riU32 slot, riBuffer buffer, riU32 offset )
+{
+    riVK_RenderPass *           vkPass     = (riVK_RenderPass *)renderPass;
+    riVK_Buffer *               vkBuffer   = (riVK_Buffer *)buffer;
+    riVK_Device *               vkDevice   = NULL;
+    riVK_Swapchain *            vkSwapchain = NULL;
+    VkDescriptorSetAllocateInfo allocInfo   = RI_ZERO_INIT;
+    VkDescriptorBufferInfo      bufferInfo  = RI_ZERO_INIT;
+    VkWriteDescriptorSet        write       = RI_ZERO_INIT;
+    VkDescriptorSet             set         = VK_NULL_HANDLE;
+    VkResult                    result      = VK_SUCCESS;
+
+    RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vkBuffer != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( slot < RHIO_MAX_SHADER_BUFFER_BINDINGS, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( slot == 0u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( RI_FLAG_CHECK( vkBuffer->info.usage, RI_BUFFER_USAGE_SHADER_READ ) != 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( (riSize)offset <= vkBuffer->info.size, RI_ERROR_INVALID_PARAM );
+
+    vkDevice = vkPass->commandList->queue->device;
+    RI_GUARD( vkDevice != NULL, RI_ERROR_INVALID_STATE );
+
+    // Offset Alignment
+    //----------------------------------------------------------
+    RI_GUARD( ( offset % vkDevice->storageBufferOffsetAlignment ) == 0u, RI_ERROR_INVALID_PARAM );
+
+    // Frame Target
+    //----------------------------------------------------------
+    vkSwapchain = vkPass->commandList->target;
+    RI_GUARD( vkSwapchain != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->boundPipeline != NULL, RI_ERROR_INVALID_STATE );
+
+    // Descriptor Set
+    //----------------------------------------------------------
+    // Allocated from the acquired frame slot pool and reset by the next
+    // acquire that reaps that slot
+    allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool     = vkSwapchain->descriptorPools[vkSwapchain->acquiredSlot];
+    allocInfo.descriptorSetCount = 1u;
+    allocInfo.pSetLayouts        = &vkDevice->shaderBufferLayout;
+
+    result = vkAllocateDescriptorSets( vkDevice->device, &allocInfo, &set );
+    if( RI_UNLIKELY( result != VK_SUCCESS ) )
+        {
+            TRACELOG( RI_LOG_ERROR, "BACKEND VK: vkAllocateDescriptorSets failed (%d)", (int)result );
+            return RI_ERROR_UNKNOWN;
+        }
+
+    bufferInfo.buffer = vkBuffer->buffer;
+    bufferInfo.offset = (VkDeviceSize)offset;
+    bufferInfo.range  = VK_WHOLE_SIZE;
+
+    write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet           = set;
+    write.descriptorType   = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.descriptorCount  = 1u;
+    write.pBufferInfo      = &bufferInfo;
+
+    vkUpdateDescriptorSets( vkDevice->device, 1u, &write, 0u, NULL );
+
+    // Descriptor Bind
+    //----------------------------------------------------------
+    vkCmdBindDescriptorSets( vkPass->commandList->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             vkPass->boundPipeline->layout, 0u, 1u, &set, 0u, NULL );
+
+    return RI_SUCCESS;
+}
+
+// Record viewport state with the GL orientation flip
+static riStatus
+_rhioVK_render_pass_set_viewport( riRenderPass renderPass, riU32 x, riU32 y, riU32 width, riU32 height )
+{
+    riVK_RenderPass * vkPass   = (riVK_RenderPass *)renderPass;
+    VkViewport        viewport = RI_ZERO_INIT;
+    VkRect2D          scissor  = RI_ZERO_INIT;
+
+    RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( width > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( height > 0u, RI_ERROR_INVALID_PARAM );
+
+    // Viewport Flip
+    //----------------------------------------------------------
+    // GL orientation: origin top-left; Vulkan receives a negative-height
+    // viewport whose top edge sits at the requested bottom edge
+    viewport.x        = (float)x;
+    viewport.y        = (float)( vkPass->targetHeight - ( y + height ) );
+    viewport.width    = (float)width;
+    viewport.height   = -(float)height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    scissor.offset.x      = (int)x;
+    scissor.offset.y      = (int)y;
+    scissor.extent.width  = width;
+    scissor.extent.height = height;
+
+    vkCmdSetViewport( vkPass->commandList->commandBuffer, 0u, 1u, &viewport );
+    vkCmdSetScissor( vkPass->commandList->commandBuffer, 0u, 1u, &scissor );
+
+    vkPass->scissorSet = true;
+
+    return RI_SUCCESS;
+}
+
+// Record a non-indexed draw
+static riStatus
+_rhioVK_render_pass_draw( riRenderPass renderPass, riU32 vertexCount, riU32 instanceCount, riU32 firstVertex,
+                          riU32 firstInstance )
+{
+    riVK_RenderPass * vkPass = (riVK_RenderPass *)renderPass;
+
+    RI_GUARD( vkPass != NULL, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( !vkPass->ended, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList != NULL, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->activeRenderPass == vkPass, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vkPass->commandList->state == RI_VK_COMMAND_LIST_STATE_RECORDING, RI_ERROR_INVALID_STATE );
+    RI_GUARD( vertexCount > 0u, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( instanceCount == 1u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( firstInstance == 0u, RI_ERROR_BACKEND_UNAVAIL );
+    RI_GUARD( firstVertex < RHIO_VK_TRIANGLE_VERTEX_COUNT, RI_ERROR_INVALID_PARAM );
+    RI_GUARD( vertexCount <= RHIO_VK_TRIANGLE_VERTEX_COUNT - firstVertex, RI_ERROR_INVALID_PARAM );
+
+    vkCmdDraw( vkPass->commandList->commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance );
+
+    return RI_SUCCESS;
 }
 
 //----------------------------------------------------------------------------------
